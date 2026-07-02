@@ -416,20 +416,82 @@ impl Limiter {
     // ━━ Internal helpers ━━
 
     /// Resolve a target to cgroup IDs.
+    ///
+    /// For process names, does a DIRECT /proc walk (not identity map cache)
+    /// to find all PIDs matching the name, then resolves their cgroup IDs.
+    /// This avoids the "first-pid-wins" issue where aria2c shares a cgroup
+    /// with alacritty — direct lookup finds aria2c's PID directly.
     fn resolve_target(&mut self, target: &Target) -> Result<Vec<u32>> {
         match target {
             Target::CgroupId(id) => Ok(vec![*id]),
             Target::ProcessName(name) => {
-                self.identity.maybe_refresh();
+                // Direct /proc walk: find all PIDs whose comm matches.
                 let name_lower = name.to_lowercase();
-                let matches: Vec<u32> = self
-                    .identity
-                    .all()
-                    .iter()
-                    .filter(|id| id.comm.to_lowercase() == name_lower)
-                    .map(|id| id.cgroup_id)
-                    .collect();
-                Ok(matches)
+                let mut cgroup_ids = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+
+                let proc_entries = match std::fs::read_dir("/proc") {
+                    Ok(e) => e,
+                    Err(_) => return Ok(Vec::new()),
+                };
+
+                for entry in proc_entries.flatten() {
+                    let pid_str = entry.file_name();
+                    let pid_str = match pid_str.to_str() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let pid: u32 = match pid_str.parse() {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+
+                    // Read comm.
+                    let comm = match std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+                        Ok(s) => s.trim().to_lowercase(),
+                        Err(_) => continue,
+                    };
+
+                    if comm != name_lower {
+                        continue;
+                    }
+
+                    // Read cgroup path.
+                    let cgroup_content =
+                        match std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+
+                    let cgroup_path = cgroup_content
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split("::").nth(1))
+                        .map(|s| s.trim().to_string());
+
+                    let cgroup_path = match cgroup_path {
+                        Some(p) if !p.is_empty() => p,
+                        _ => continue,
+                    };
+
+                    // Resolve cgroup_id.
+                    let full_path = format!("/sys/fs/cgroup{cgroup_path}");
+                    let cgroup_id_64 =
+                        match crate::ebpf::identity::resolve_cgroup_id_from_path(&full_path) {
+                            Some(id) => id,
+                            None => continue,
+                        };
+
+                    let cgroup_id = cgroup_id_64 as u32;
+                    if seen.insert(cgroup_id) {
+                        cgroup_ids.push(cgroup_id);
+                    }
+                }
+
+                // Also refresh identity map for display purposes.
+                self.identity.maybe_refresh();
+
+                Ok(cgroup_ids)
             }
         }
     }
@@ -543,8 +605,18 @@ impl Limiter {
             }
             Ok(results)
         } else {
-            // Pin mode: stats map is not pinned. Return empty.
-            Ok(Vec::new())
+            // Pin mode: read from pinned stats map.
+            let pin_path = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+            let map_data =
+                MapData::from_pin(pin_path).map_err(|e| anyhow!("pinned stats map: {e:?}"))?;
+            let map_obj = aya::maps::Map::HashMap(map_data);
+            let map: BpfHashMap<_, u32, LimiterStatsRaw> =
+                BpfHashMap::try_from(&map_obj).context("Failed to open pinned stats map")?;
+            let mut results = Vec::new();
+            for (key, value) in map.iter().flatten() {
+                results.push((key, value));
+            }
+            Ok(results)
         }
     }
 
@@ -651,17 +723,32 @@ impl Limiter {
 
     /// Read current watchdog deadline.
     pub fn read_watchdog(&self) -> Result<Option<u64>> {
-        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
-        let map: BpfArray<_, u64> = BpfArray::try_from(
-            bpf.map("watchdog_deadline")
-                .context("watchdog_deadline not found")?,
-        )
-        .context("Failed to access watchdog_deadline")?;
+        if let Some(bpf) = self.bpf.as_ref() {
+            let map: BpfArray<_, u64> = BpfArray::try_from(
+                bpf.map("watchdog_deadline")
+                    .context("watchdog_deadline not found")?,
+            )
+            .context("Failed to access watchdog_deadline")?;
 
-        let index: u32 = 0;
-        match map.get(&index, 0) {
-            Ok(deadline) => Ok(Some(deadline)),
-            Err(_) => Ok(None),
+            let index: u32 = 0;
+            match map.get(&index, 0) {
+                Ok(deadline) => Ok(Some(deadline)),
+                Err(_) => Ok(None),
+            }
+        } else {
+            // Pin mode: read from pinned watchdog map.
+            let pin_path = "/sys/fs/bpf/zelynic/watchdog_deadline";
+            let map_data =
+                MapData::from_pin(pin_path).map_err(|e| anyhow!("pinned watchdog map: {e:?}"))?;
+            let map_obj = aya::maps::Map::Array(map_data);
+            let map: BpfArray<_, u64> =
+                BpfArray::try_from(&map_obj).context("Failed to open pinned watchdog map")?;
+
+            let index: u32 = 0;
+            match map.get(&index, 0) {
+                Ok(deadline) => Ok(Some(deadline)),
+                Err(_) => Ok(None),
+            }
         }
     }
 

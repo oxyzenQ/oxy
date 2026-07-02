@@ -254,6 +254,12 @@ impl IdentityMap {
 }
 
 /// Resolve a 64-bit cgroup ID from a cgroup v2 path.
+/// Public for use by limiter's direct /proc lookup.
+pub fn resolve_cgroup_id_from_path(path: &str) -> Option<u64> {
+    cgroup_id_from_path(path)
+}
+
+/// Resolve a 64-bit cgroup ID from a cgroup v2 path.
 ///
 /// Strategy:
 /// 1. Try `/sys/fs/cgroup{path}/cgroup.id` file (kernel 5.13+).

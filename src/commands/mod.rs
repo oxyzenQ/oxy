@@ -19,6 +19,10 @@ const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
 #[cfg(feature = "ebpf")]
 const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
 #[cfg(feature = "ebpf")]
+const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+#[cfg(feature = "ebpf")]
 const PID_FILE: &str = "/tmp/zelynic.pid";
 
 /// Top-level CLI dispatch.
@@ -357,6 +361,8 @@ fn handle_serve(cli: &Cli) -> Result<()> {
 fn pin_maps(limiter: &crate::ebpf::limiter::Limiter) -> Result<()> {
     limiter.pin_map("cgroup_policy_dl", PIN_MAP_POLICY_DL)?;
     limiter.pin_map("cgroup_policy_ul", PIN_MAP_POLICY_UL)?;
+    limiter.pin_map("watchdog_deadline", PIN_MAP_WATCHDOG)?;
+    limiter.pin_map("cgroup_limiter_stats", PIN_MAP_STATS)?;
     Ok(())
 }
 
@@ -388,6 +394,8 @@ fn kill_serve_child() -> Result<()> {
     let _ = std::fs::remove_file(PID_FILE);
     let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
     let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);
+    let _ = std::fs::remove_file(PIN_MAP_WATCHDOG);
+    let _ = std::fs::remove_file(PIN_MAP_STATS);
     let _ = std::fs::remove_dir(PIN_DIR);
     Ok(())
 }
