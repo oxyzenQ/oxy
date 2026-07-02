@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Wolf Architecture Branch
+
+- **eBPF identity resolution (Layer 2)**: `IdentityMap` walks `/proc/*/cgroup`
+  + `/sys/fs/cgroup{path}/cgroup.id` to build a reverse map: cgroup ID →
+  process name / uid / cgroup path. 10s TTL refresh by default; first-pid-wins
+  per cgroup. Best-effort — falls back to raw `cg:{id}` labels if resolution
+  fails. The BPF program is unaffected.
+- **Observer output enriched with identity labels**: `CounterSummary::print()`
+  now takes `&IdentityMap` and renders `cg:73386 (firefox)` instead of bare
+  `cg:73386`. Column width expanded from 20 to 30 chars. New `print_verbose()`
+  method shows the full cgroup path.
+- **`docs/WOLF_ARCHITECTURE.md`**: documents the pure-eBPF architecture vision
+  (5-layer model: BPF → Map → Identity → Aggregation → Presentation), principles
+  (pure eBPF, single hooking layer, userspace-composable, fail-safe,
+  observable, Linux-only), non-goals (no Windows, no daemon, no combined-tool
+  fallback), and branch strategy (`main` = legacy v3.x, `wolf-architecture` =
+  pure eBPF staging).
+- **Observer now primes identity map before first poll**: `handle_ebpf_observe()`
+  calls `refresh_identity()` once at startup so the first summary already has
+  human-readable labels. Subsequent refreshes are TTL-gated inside
+  `poll_and_summarize()`.
+
+### Changed
+
+- `IdentityMap` API rewritten from per-call `resolve(cgroup_id, fallback_pid,
+  fallback_comm)` to refresh-based `refresh()` / `maybe_refresh()` / `get()` /
+  `label()` / `label_verbose()`. The old API was a stub that never actually
+  walked `/proc` — it just cached whatever fallback was passed in. The new API
+  does real reverse-lookup.
+- `CounterSummary::print()` signature changed: `print()` → `print(&IdentityMap)`.
+  All callers updated.
+
+### Notes
+
+- This work lives on the `wolf-architecture` branch. **No tag, no release.**
+  The `main` branch continues the v3.x legacy line (`tc`/`nft`/`systemd-wrapper`).
+  The `wolf-architecture` branch is the staging ground for the pure-eBPF rewrite.
+- The `intergalaxion` branch (44 commits of planning docs, 0 BPF programs) is
+  superseded by this branch.
+
 ### Added
 
 - **v3.1 phase 22 Release Prep / Version Bump**: Version bump +

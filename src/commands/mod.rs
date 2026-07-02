@@ -274,6 +274,13 @@ pub(crate) fn dispatch(cli: Cli, iface_value: Option<&str>) -> Result<()> {
 }
 
 /// eBPF observer: load BPF program, attach, read counters, print summary.
+///
+/// Wolf Architecture flow:
+///   Layer 0 (kernel): BPF cgroup_skb/egress program updates cgroup_counters map
+///   Layer 1 (map):    read_counters() drains the map
+///   Layer 2 (userspace): IdentityMap resolves cgroup IDs to process names
+///   Layer 3 (userspace): poll_and_summarize() aggregates + computes deltas
+///   Layer 4 (presentation): CounterSummary::print() with identity labels
 #[cfg(feature = "ebpf")]
 fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
     use crate::ebpf::loader::Observer;
@@ -285,6 +292,15 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
     }
 
     let mut observer = Observer::attach()?;
+
+    // Prime the identity map before the first poll so the very first summary
+    // already has human-readable labels instead of raw `cg:{id}`.
+    let resolved = observer.refresh_identity();
+    eprintln!(
+        "[ebpf] Identity map: {} cgroup{} resolved",
+        resolved,
+        if resolved == 1 { "" } else { "s" }
+    );
     eprintln!("[ebpf] Press Ctrl+C to stop\n");
 
     let start = Instant::now();
@@ -294,7 +310,7 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
     loop {
         if last_print.elapsed() >= interval_dur {
             let summary = observer.poll_and_summarize()?;
-            summary.print();
+            summary.print(observer.identity());
             last_print = Instant::now();
         }
 
@@ -308,7 +324,7 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
 
     // Final summary
     let summary = observer.poll_and_summarize()?;
-    summary.print();
+    summary.print(observer.identity());
     observer.detach();
     Ok(())
 }

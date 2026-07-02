@@ -15,6 +15,8 @@ use aya::{
 use std::fs::File;
 use std::path::PathBuf;
 
+use crate::ebpf::identity::IdentityMap;
+
 const BPF_OBJECT_PATH: &str = "bpf/observer.bpf.o";
 
 /// Per-cgroup stats from BPF map (must match C struct).
@@ -35,6 +37,9 @@ pub struct Observer {
     cgroup_path: String,
     /// Previous stats for delta calculation.
     prev_stats: std::collections::HashMap<u32, CgroupStatsRaw>,
+    /// Wolf Architecture Layer 2: cgroup ID → process identity resolver.
+    /// Refreshed lazily via `maybe_refresh()` before each summary print.
+    identity: IdentityMap,
 }
 
 impl Observer {
@@ -78,7 +83,24 @@ impl Observer {
             bpf: Some(bpf),
             cgroup_path: cgroup_path.to_string(),
             prev_stats: std::collections::HashMap::new(),
+            identity: IdentityMap::new(),
         })
+    }
+
+    /// Borrow the identity map (read-only) for label rendering.
+    pub fn identity(&self) -> &IdentityMap {
+        &self.identity
+    }
+
+    /// Force-refresh the identity map. Returns the number of cgroups resolved.
+    pub fn refresh_identity(&mut self) -> usize {
+        self.identity.refresh()
+    }
+
+    /// Lazily refresh the identity map if its TTL has elapsed.
+    /// Call this before printing a summary to ensure labels are fresh.
+    pub fn maybe_refresh_identity(&mut self) -> bool {
+        self.identity.maybe_refresh()
     }
 
     /// Read cgroup_counters map directly. Returns (cgroup_id, stats) pairs.
@@ -127,6 +149,10 @@ impl Observer {
             self.prev_stats.insert(cgroup_id, stats);
         }
 
+        // Refresh identity map if stale — ensures labels stay current
+        // with process churn without paying the /proc walk cost every poll.
+        self.maybe_refresh_identity();
+
         Ok(summary)
     }
 
@@ -162,7 +188,11 @@ pub struct CgroupDelta {
 }
 
 impl CounterSummary {
-    pub fn print(&self) {
+    /// Print summary using identity map for human-readable cgroup labels.
+    ///
+    /// Wolf Architecture Layer 3: Aggregation enriches raw counters with
+    /// identity (Layer 2) before presentation (Layer 4).
+    pub fn print(&self, identity: &IdentityMap) {
         if self.total_packets == 0 {
             println!("\n  (no traffic since last check)");
             return;
@@ -172,24 +202,60 @@ impl CounterSummary {
         println!("  Packets:  {}", self.total_packets);
         println!("  Bytes:    {}", format_bytes(self.total_bytes));
         println!("  Cgroups:  {}", self.cgroups.len());
+        if !identity.is_empty() {
+            println!("  Resolved: {} cgroup identities", identity.len());
+        }
         println!();
 
         let mut sorted = self.cgroups.clone();
         sorted.sort_by_key(|c| std::cmp::Reverse(c.bytes));
 
         println!(
-            "  {:<20} {:>10} {:>10} {:>12}",
+            "  {:<30} {:>10} {:>10} {:>12}",
             "CGROUP", "DELTA PKT", "DELTA BYTES", "TOTAL BYTES"
         );
-        println!("  {}", "─".repeat(56));
+        println!("  {}", "─".repeat(66));
 
         for c in sorted.iter().take(20) {
             println!(
-                "  {:<20} {:>10} {:>10} {:>12}",
-                format!("cg:{}", c.cgroup_id),
+                "  {:<30} {:>10} {:>10} {:>12}",
+                identity.label(c.cgroup_id),
                 c.packets,
                 format_bytes(c.bytes),
                 format_bytes(c.total_bytes),
+            );
+        }
+    }
+
+    /// Print summary with verbose labels (includes cgroup path).
+    pub fn print_verbose(&self, identity: &IdentityMap) {
+        if self.total_packets == 0 {
+            println!("\n  (no traffic since last check)");
+            return;
+        }
+
+        println!("\n━━━ eBPF Traffic Summary (verbose) ━━━");
+        println!("  Packets:  {}", self.total_packets);
+        println!("  Bytes:    {}", format_bytes(self.total_bytes));
+        println!("  Cgroups:  {}", self.cgroups.len());
+        if !identity.is_empty() {
+            println!("  Resolved: {} cgroup identities", identity.len());
+        }
+        println!();
+
+        let mut sorted = self.cgroups.clone();
+        sorted.sort_by_key(|c| std::cmp::Reverse(c.bytes));
+
+        for c in sorted.iter().take(20) {
+            println!(
+                "  {}",
+                identity.label_verbose(c.cgroup_id)
+            );
+            println!(
+                "    delta: {} pkt / {}   total: {}",
+                c.packets,
+                format_bytes(c.bytes),
+                format_bytes(c.total_bytes)
             );
         }
     }
