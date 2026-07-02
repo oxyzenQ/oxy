@@ -16,6 +16,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Commands::StrictSingle {
             target,
+            rate,
             download,
             upload,
             watchdog,
@@ -26,6 +27,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             {
                 handle_strict_single(
                     &target,
+                    rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
                     watchdog,
@@ -38,6 +40,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             {
                 let _ = (
                     target,
+                    rate,
                     download,
                     upload,
                     watchdog,
@@ -52,6 +55,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 
         Some(Commands::StrictMulti {
             targets,
+            rate,
             download,
             upload,
             watchdog,
@@ -62,6 +66,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             {
                 handle_strict_multi(
                     &targets,
+                    rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
                     watchdog,
@@ -74,6 +79,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             {
                 let _ = (
                     targets,
+                    rate,
                     download,
                     upload,
                     watchdog,
@@ -169,8 +175,10 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 // ━━ Command handlers (ebpf feature) ━━
 
 #[cfg(feature = "ebpf")]
+#[allow(clippy::too_many_arguments)]
 fn handle_strict_single(
     target_str: &str,
+    rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
     watchdog: u64,
@@ -185,12 +193,21 @@ fn handle_strict_single(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let rates = parse_rates(download, upload, allow_dangerous)?;
+    // Parse rates: positional rate = both dl+ul, -d/-u for per-direction.
+    let rates = if let Some(r) = rate {
+        let r_bps = parse_rate_checked(r, allow_dangerous)?;
+        crate::ebpf::limiter::RateSpec {
+            download: Some(r_bps),
+            upload: Some(r_bps),
+        }
+    } else {
+        parse_rates(download, upload, allow_dangerous)?
+    };
 
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
-            "No rate specified. Use -d <rate> for download, -u <rate> for upload.\n\
-             Example: zelynic strict-single brave -d 100KB/s"
+            "No rate specified. Use positional rate or -d/-u flags.\n\
+             Example: zelynic strict-single brave 100kb"
         ));
     }
 
@@ -207,46 +224,17 @@ fn handle_strict_single(
         return Ok(());
     }
 
-    // Clean one-liner summary (quiet by default).
-    let dl_str = rates
-        .download
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
-        .unwrap_or_default();
-    let ul_str = rates
-        .upload
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
-        .unwrap_or_default();
-    let parts: Vec<&str> = [
-        if !dl_str.is_empty() {
-            dl_str.as_str()
-        } else {
-            ""
-        },
-        if !ul_str.is_empty() {
-            ul_str.as_str()
-        } else {
-            ""
-        },
-    ]
-    .iter()
-    .filter(|s| !s.is_empty())
-    .copied()
-    .collect();
-    eprintln!(
-        "Limiting '{target_str}' to {} ({} polic{}, Ctrl+C to stop)",
-        parts.join(" + "),
-        applied,
-        if applied == 1 { "y" } else { "ies" }
-    );
-
+    print_summary_line(target_str, &rates, applied, duration);
     run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
     limiter.detach();
     Ok(())
 }
 
 #[cfg(feature = "ebpf")]
+#[allow(clippy::too_many_arguments)]
 fn handle_strict_multi(
     targets_str: &str,
+    rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
     watchdog: u64,
@@ -261,12 +249,20 @@ fn handle_strict_multi(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let rates = parse_rates(download, upload, allow_dangerous)?;
+    let rates = if let Some(r) = rate {
+        let r_bps = parse_rate_checked(r, allow_dangerous)?;
+        crate::ebpf::limiter::RateSpec {
+            download: Some(r_bps),
+            upload: Some(r_bps),
+        }
+    } else {
+        parse_rates(download, upload, allow_dangerous)?
+    };
 
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
-            "No rate specified. Use -d <rate> for download, -up <rate> for upload.\n\
-             Example: zelynic strict-multi brave:curl -d 1MB/s"
+            "No rate specified. Use positional rate or -d/-u flags.\n\
+             Example: zelynic strict-multi brave:curl 1mb"
         ));
     }
 
@@ -280,7 +276,7 @@ fn handle_strict_multi(
     if targets.is_empty() {
         return Err(anyhow::anyhow!(
             "No targets specified. Use colon-separated list.\n\
-             Example: zelynic strict-multi brave:curl:pacman -d 1MB/s"
+             Example: zelynic strict-multi brave:curl:pacman 1mb"
         ));
     }
 
@@ -296,7 +292,20 @@ fn handle_strict_multi(
         return Ok(());
     }
 
-    // Clean one-liner summary (quiet by default).
+    print_summary_line(targets_str, &rates, applied, duration);
+    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
+    limiter.detach();
+    Ok(())
+}
+
+/// Print the one-liner summary line for strict commands.
+#[cfg(feature = "ebpf")]
+fn print_summary_line(
+    target_str: &str,
+    rates: &crate::ebpf::limiter::RateSpec,
+    applied: usize,
+    duration: u64,
+) {
     let dl_str = rates
         .download
         .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
@@ -321,14 +330,30 @@ fn handle_strict_multi(
     .filter(|s| !s.is_empty())
     .copied()
     .collect();
+
+    let exit_info = if duration > 0 {
+        format!("{duration} seconds will be self-exit")
+    } else {
+        "Ctrl+C to stop".to_string()
+    };
+
     eprintln!(
-        "Limiting group '{targets_str}' to {} ({applied} policies, Ctrl+C to stop)",
+        "Limiting '{target_str}' to {} ({applied} policies, {exit_info})",
         parts.join(" + ")
     );
+}
 
-    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
-    limiter.detach();
-    Ok(())
+/// Parse a rate string with validation.
+#[cfg(feature = "ebpf")]
+fn parse_rate_checked(s: &str, allow_dangerous: bool) -> Result<u64> {
+    use crate::ebpf::limiter::{parse_rate, validate_rate, MIN_RATE};
+    let rate = parse_rate(s)?;
+    if !allow_dangerous {
+        validate_rate(rate)?;
+    } else if rate < MIN_RATE {
+        eprintln!("[limiter] WARNING: rate below minimum — overriding with --allow-dangerous");
+    }
+    Ok(rate)
 }
 
 #[cfg(feature = "ebpf")]
@@ -519,7 +544,7 @@ fn run_enforcement_loop(
     use std::time::{Duration, Instant};
 
     let start = Instant::now();
-    let stats_interval = Duration::from_secs(5);
+    let stats_interval = Duration::from_secs(1);
     let mut last_print = Instant::now();
 
     loop {

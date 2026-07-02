@@ -681,26 +681,33 @@ fn find_bpf_object() -> Result<PathBuf> {
     )
 }
 
-/// Parse a rate string like "1MB/s", "500KB/s" into bytes per second.
+/// Parse a rate string. Lowercase units only: kb, mb, gb, b.
+/// Plain numbers = bytes per second.
+///
+/// Accepted: "100kb", "1mb", "1gb", "500b", "1000000"
+/// Rejected: "100KB", "1MB/s", "100KB/S", "1MB" (uppercase)
 pub fn parse_rate(s: &str) -> Result<u64> {
     let s = s.trim();
 
+    // Plain number = bytes per second.
     if let Ok(n) = s.parse::<u64>() {
         return Ok(n);
     }
 
-    let upper = s.to_uppercase();
-
-    let (num_part, multiplier) = if let Some(v) = upper.strip_suffix("GB/S") {
+    // Lowercase units only. Case-sensitive to enforce lowercase convention.
+    let (num_part, multiplier) = if let Some(v) = s.strip_suffix("gb") {
         (v, 1_000_000_000u64)
-    } else if let Some(v) = upper.strip_suffix("MB/S") {
+    } else if let Some(v) = s.strip_suffix("mb") {
         (v, 1_000_000u64)
-    } else if let Some(v) = upper.strip_suffix("KB/S") {
+    } else if let Some(v) = s.strip_suffix("kb") {
         (v, 1_000u64)
-    } else if let Some(v) = upper.strip_suffix("B/S") {
+    } else if let Some(v) = s.strip_suffix("b") {
         (v, 1u64)
     } else {
-        bail!("Invalid rate format '{}'. Use: 1MB/s, 500KB/s, 1000000", s);
+        bail!(
+            "Invalid rate '{}'. Use lowercase: 1mb, 500kb, 1gb, or plain number",
+            s
+        );
     };
 
     let n: u64 = num_part
@@ -779,31 +786,38 @@ mod tests {
 
     #[test]
     fn test_parse_rate_kb() {
-        assert_eq!(parse_rate("1KB/s").unwrap(), 1_000);
-        assert_eq!(parse_rate("500KB/s").unwrap(), 500_000);
+        assert_eq!(parse_rate("1kb").unwrap(), 1_000);
+        assert_eq!(parse_rate("500kb").unwrap(), 500_000);
     }
 
     #[test]
     fn test_parse_rate_mb() {
-        assert_eq!(parse_rate("1MB/s").unwrap(), 1_000_000);
-        assert_eq!(parse_rate("5MB/s").unwrap(), 5_000_000);
+        assert_eq!(parse_rate("1mb").unwrap(), 1_000_000);
+        assert_eq!(parse_rate("5mb").unwrap(), 5_000_000);
     }
 
     #[test]
     fn test_parse_rate_gb() {
-        assert_eq!(parse_rate("1GB/s").unwrap(), 1_000_000_000);
+        assert_eq!(parse_rate("1gb").unwrap(), 1_000_000_000);
     }
 
     #[test]
-    fn test_parse_rate_case_insensitive() {
-        assert_eq!(parse_rate("1mb/s").unwrap(), 1_000_000);
-        assert_eq!(parse_rate("1Gb/S").unwrap(), 1_000_000_000);
+    fn test_parse_rate_bytes() {
+        assert_eq!(parse_rate("500b").unwrap(), 500);
+    }
+
+    #[test]
+    fn test_parse_rate_rejects_uppercase() {
+        assert!(parse_rate("1KB").is_err());
+        assert!(parse_rate("1MB/s").is_err());
+        assert!(parse_rate("1GB").is_err());
+        assert!(parse_rate("1KB/S").is_err());
     }
 
     #[test]
     fn test_parse_rate_invalid() {
         assert!(parse_rate("abc").is_err());
-        assert!(parse_rate("1XB/s").is_err());
+        assert!(parse_rate("1xb").is_err());
         assert!(parse_rate("").is_err());
     }
 

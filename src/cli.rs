@@ -55,19 +55,24 @@ pub enum Commands {
     /// Limit a single app's network speed
     ///
     /// Examples:
-    ///   zelynic strict-single brave -d 100KB/s
-    ///   zelynic strict-single firefox -d 1MB/s -u 500KB/s
-    ///   zelynic strict-single 73386 -d 100KB/s --watchdog 60
+    ///   zelynic strict-single brave 100kb              # both dl+ul = 100kb
+    ///   zelynic strict-single brave -d 100kb           # download only
+    ///   zelynic strict-single brave -u 500kb           # upload only
+    ///   zelynic strict-single firefox -d 1mb -u 500kb  # both, different rates
     #[command(name = "strict-single")]
     StrictSingle {
         /// Target: process name (e.g., brave) or cgroup ID (e.g., 73386)
         target: String,
 
-        /// Download rate limit (e.g., 100KB/s, 1MB/s)
+        /// Rate for both download+upload (e.g., 100kb, 1mb). Use -d/-u for per-direction.
+        #[arg(value_name = "RATE")]
+        rate: Option<String>,
+
+        /// Download rate limit (e.g., 100kb, 1mb)
         #[arg(short = 'd', long = "download")]
         download: Option<String>,
 
-        /// Upload rate limit (e.g., 100KB/s, 1MB/s)
+        /// Upload rate limit (e.g., 100kb, 1mb)
         #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
 
@@ -75,12 +80,12 @@ pub enum Commands {
         #[arg(long, default_value = "30")]
         watchdog: u64,
 
-        /// Allow rates below 1 KB/s (dangerous)
+        /// Allow rates below 1 kb (dangerous)
         #[arg(long)]
         allow_dangerous: bool,
 
-        /// Print stats every N seconds, then exit (0 = run until Ctrl+C)
-        #[arg(long, default_value = "0")]
+        /// Run duration in seconds, then self-exit (default: 5, 0 = until Ctrl+C)
+        #[arg(long, default_value = "5")]
         duration: u64,
     },
 
@@ -90,12 +95,16 @@ pub enum Commands {
     /// If one app downloads at full rate, others get nothing.
     ///
     /// Examples:
-    ///   zelynic strict-multi brave:curl:pacman -d 1MB/s
-    ///   zelynic strict-multi brave:firefox -d 1MB/s -u 1MB/s
+    ///   zelynic strict-multi brave:curl:pacman 1mb              # both dl+ul = 1mb
+    ///   zelynic strict-multi brave:curl -d 1mb -u 500kb         # per-direction
     #[command(name = "strict-multi")]
     StrictMulti {
         /// Targets separated by colons (e.g., brave:curl:pacman)
         targets: String,
+
+        /// Rate for both download+upload (e.g., 1mb). Use -d/-u for per-direction.
+        #[arg(value_name = "RATE")]
+        rate: Option<String>,
 
         /// Download rate limit (shared across all targets)
         #[arg(short = 'd', long = "download")]
@@ -109,12 +118,12 @@ pub enum Commands {
         #[arg(long, default_value = "30")]
         watchdog: u64,
 
-        /// Allow rates below 1 KB/s (dangerous)
+        /// Allow rates below 1 kb (dangerous)
         #[arg(long)]
         allow_dangerous: bool,
 
-        /// Print stats every N seconds, then exit (0 = run until Ctrl+C)
-        #[arg(long, default_value = "0")]
+        /// Run duration in seconds, then self-exit (default: 5, 0 = until Ctrl+C)
+        #[arg(long, default_value = "5")]
         duration: u64,
     },
 
