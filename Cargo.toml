@@ -1,13 +1,13 @@
 [package]
 name = "zelynic"
-version = "3.1.1"
+version = "4.0.0-alpha"
 edition = "2021"
-description = "Pure eBPF network rate limiter for Linux (Wolf Architecture)"
+description = "Per-app network rate limiter for Linux"
 authors = ["rezky_nightky (oxyzenQ) <with dot rezky at gmail dot com>"]
 license = "GPL-3.0-only"
 repository = "https://github.com/oxyzenQ/zelynic"
 readme = "README.md"
-keywords = ["ebpf", "bandwidth", "network", "linux", "rate-limiting"]
+keywords = ["bandwidth", "network", "rate-limiter", "linux", "ebpf"]
 categories = ["command-line-utilities", "network-programming"]
 rust-version = "1.88.0"
 

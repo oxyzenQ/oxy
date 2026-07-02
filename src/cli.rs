@@ -1,11 +1,11 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
-/// zelynic — Pure eBPF network rate limiter for Linux
+/// zelynic — Per-app network rate limiter for Linux
 ///
-/// Wolf Architecture: single hooking layer (eBPF), no tc/nft/systemd-wrapper.
-/// Requires kernel 5.13+ (cgroup v2 + cgroup.id file).
+/// Limit any app's download/upload speed using eBPF. Pure kernel enforcement,
+/// no tc/nft. Requires kernel 5.13+ and root.
 #[derive(Parser, Debug)]
 #[command(
     name = "zelynic",
@@ -34,113 +34,135 @@ pub struct Cli {
     pub check_update: bool,
 
     /// Disable colored output
-    ///
-    /// Alternatively, set NO_COLOR=1 environment variable.
     #[arg(long, global = true, help = "Disable colored output")]
     pub no_color: bool,
 
-    /// Show comprehensive help with all commands, options, and examples
-    #[arg(
-        long = "help-all",
-        global = false,
-        help = "Show comprehensive help with all commands and examples"
-    )]
+    /// Verbose/debug output
+    #[arg(short = 'v', long = "verbose", global = true)]
+    pub verbose: bool,
+
+    /// Output as JSON (where applicable)
+    #[arg(long, global = true)]
+    pub print_json: bool,
+
+    /// Show comprehensive help
+    #[arg(long = "help-all", global = false)]
     pub help_all: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// eBPF observer + limiter engine
+    /// Limit a single app's network speed
     ///
-    /// Real-time kernel-level traffic observation and enforcement using eBPF.
-    /// Pure eBPF — no tc, no nft, no cgroup-wrapper.
-    #[command(hide = false)]
-    Ebpf {
-        #[command(subcommand)]
-        command: Option<EbpfCommands>,
+    /// Examples:
+    ///   zelynic strict-single brave -d 100KB/s
+    ///   zelynic strict-single firefox -d 1MB/s -up 500KB/s
+    ///   zelynic strict-single 73386 -d 100KB/s --watchdog 60
+    #[command(name = "strict-single")]
+    StrictSingle {
+        /// Target: process name (e.g., brave) or cgroup ID (e.g., 73386)
+        target: String,
+
+        /// Download rate limit (e.g., 100KB/s, 1MB/s)
+        #[arg(short = 'd', long = "download")]
+        download: Option<String>,
+
+        /// Upload rate limit (e.g., 100KB/s, 1MB/s)
+        #[arg(short = 'u', long = "upload", alias = "up")]
+        upload: Option<String>,
+
+        /// Watchdog timeout in seconds (default: 30, min: 5)
+        #[arg(long, default_value = "30")]
+        watchdog: u64,
+
+        /// Allow rates below 1 KB/s (dangerous)
+        #[arg(long)]
+        allow_dangerous: bool,
+
+        /// Print stats every N seconds, then exit (0 = run until Ctrl+C)
+        #[arg(long, default_value = "0")]
+        duration: u64,
     },
 
-    /// Show backend information (eBPF support, kernel version, etc.)
-    Backend {
-        #[command(subcommand)]
-        command: Option<BackendCommands>,
+    /// Limit multiple apps sharing one rate (group limit)
+    ///
+    /// All apps in the group collectively share the rate limit.
+    /// If one app downloads at full rate, others get nothing.
+    ///
+    /// Examples:
+    ///   zelynic strict-multi brave:curl:pacman -d 1MB/s
+    ///   zelynic strict-multi brave:firefox -d 1MB/s -up 1MB/s
+    #[command(name = "strict-multi")]
+    StrictMulti {
+        /// Targets separated by colons (e.g., brave:curl:pacman)
+        targets: String,
+
+        /// Download rate limit (shared across all targets)
+        #[arg(short = 'd', long = "download")]
+        download: Option<String>,
+
+        /// Upload rate limit (shared across all targets)
+        #[arg(short = 'u', long = "upload", alias = "up")]
+        upload: Option<String>,
+
+        /// Watchdog timeout in seconds (default: 30, min: 5)
+        #[arg(long, default_value = "30")]
+        watchdog: u64,
+
+        /// Allow rates below 1 KB/s (dangerous)
+        #[arg(long)]
+        allow_dangerous: bool,
+
+        /// Print stats every N seconds, then exit (0 = run until Ctrl+C)
+        #[arg(long, default_value = "0")]
+        duration: u64,
     },
+
+    /// Remove rate limit from a target
+    ///
+    /// Example: zelynic unstrict brave
+    #[command(name = "unstrict")]
+    Unstrict {
+        /// Target: process name or cgroup ID
+        target: String,
+    },
+
+    /// Remove ALL rate limits (emergency reset)
+    #[command(name = "unstrict-all")]
+    UnstrictAll,
+
+    /// Show active limits and watchdog status
+    #[command(name = "status")]
+    Status,
+
+    /// List apps with their cgroup IDs
+    #[command(name = "list-apps")]
+    ListApps,
+
+    /// Real-time traffic monitor (read-only)
+    ///
+    /// Shows per-cgroup traffic in real-time. No enforcement.
+    #[command(name = "observe")]
+    Observe {
+        /// Print summary every N seconds
+        #[arg(long, default_value = "5")]
+        interval: u64,
+
+        /// Duration in seconds (0 = until Ctrl+C)
+        #[arg(long, default_value = "0")]
+        duration: u64,
+    },
+
+    /// Check if your machine supports eBPF
+    #[command(name = "doctor")]
+    Doctor,
 
     /// Generate shell completions
     Completions {
-        /// Shell type (bash, zsh, fish, elvish, powershell)
+        /// Shell: bash, zsh, fish, elvish, powershell
         shell: String,
     },
 
     /// Generate man page
     Man,
-}
-
-/// eBPF observer + limiter subcommands.
-#[derive(Debug, Subcommand)]
-pub enum EbpfCommands {
-    /// Check if the system supports eBPF observer
-    Check,
-
-    /// Start real-time traffic observer (requires root + --features ebpf)
-    Observe {
-        /// Duration in seconds (0 = until Ctrl+C)
-        #[arg(long, default_value = "0")]
-        duration: u64,
-
-        /// Print summary every N seconds
-        #[arg(long, default_value = "5")]
-        interval: u64,
-    },
-
-    /// Enforce per-cgroup rate limits via eBPF token bucket (requires root + --features ebpf)
-    ///
-    /// Pure eBPF enforcement — no tc, no nft, no cgroup-wrapper.
-    /// Policies are ephemeral: they persist only while this command runs.
-    ///
-    /// Safety: BPF self-destruct watchdog auto-disables enforcement if
-    /// zelynic crashes (default 30s timeout). Use --watchdog to adjust.
-    ///
-    /// Examples:
-    ///   zelynic ebpf enforce --limit 73386:1MB/s
-    ///   zelynic ebpf enforce --limit firefox:500KB/s --limit unbound:100KB/s
-    ///   zelynic ebpf enforce --limit firefox:1MB/s --stats-interval 5 --watchdog 60
-    Enforce {
-        /// Rate limit policy: <cgroup_id|process_name>:<rate>
-        /// Repeatable. e.g., --limit firefox:1MB/s --limit 73386:500KB/s
-        #[arg(long = "limit", value_name = "TARGET:RATE")]
-        limits: Vec<String>,
-
-        /// Print enforcement stats every N seconds (0 = only on exit)
-        #[arg(long, default_value = "5")]
-        stats_interval: u64,
-
-        /// Duration in seconds (0 = until Ctrl+C)
-        #[arg(long, default_value = "0")]
-        duration: u64,
-
-        /// Watchdog timeout in seconds. If zelynic crashes, BPF auto-disables
-        /// after this many seconds. Default: 30. Minimum: 5.
-        #[arg(long, default_value = "30")]
-        watchdog: u64,
-
-        /// Allow rates below minimum (1 KB/s). Dangerous — may brick the
-        /// target cgroup's network access. Use with caution.
-        #[arg(long)]
-        allow_dangerous: bool,
-    },
-}
-
-#[derive(Debug, Args)]
-pub struct BackendDoctorArgs {
-    /// Output Backend Doctor report as JSON
-    #[arg(long)]
-    pub json: bool,
-}
-
-/// Backend subcommands.
-#[derive(Debug, Subcommand)]
-pub enum BackendCommands {
-    /// Show detailed read-only host capability diagnostics and backend scoring
-    Doctor(BackendDoctorArgs),
 }

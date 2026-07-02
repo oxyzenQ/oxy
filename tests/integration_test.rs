@@ -1,6 +1,6 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
-//! Integration tests for zelynic
+//! Integration tests for zelynic (Wolf Architecture — pure eBPF)
 //!
 //! These tests require root privileges and a Linux system.
 //! Run with: sudo cargo test --test integration_test
@@ -10,8 +10,6 @@ use std::thread;
 use std::time::Duration;
 
 /// Test helper to run zelynic commands
-///
-/// Uses the release binary if available, otherwise falls back to debug.
 fn zelynic_cmd() -> Command {
     let binary = env!("CARGO_BIN_EXE_zelynic");
     let mut cmd = Command::new(binary);
@@ -19,60 +17,58 @@ fn zelynic_cmd() -> Command {
     cmd
 }
 
-/// Test that zelynic list works
+/// Test that doctor works
 #[test]
-#[ignore = "requires root"]
-fn test_list_basic() {
+fn test_doctor() {
     let output = zelynic_cmd()
-        .arg("list")
+        .arg("doctor")
         .output()
-        .expect("Failed to execute zelynic list");
+        .expect("Failed to execute zelynic doctor");
 
     assert!(
         output.status.success(),
-        "zelynic list failed: {}",
+        "zelynic doctor failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.is_empty(), "zelynic list produced no output");
+    assert!(!stdout.is_empty(), "zelynic doctor produced no output");
 }
 
-/// Test JSON output format
+/// Test that list-apps works (requires root + eBPF feature)
 #[test]
-#[ignore = "requires root"]
-fn test_list_json() {
+#[ignore = "requires root + eBPF feature"]
+fn test_list_apps() {
     let output = zelynic_cmd()
-        .arg("list")
-        .arg("--json")
+        .arg("list-apps")
         .output()
-        .expect("Failed to execute zelynic list --json");
+        .expect("Failed to execute zelynic list-apps");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "zelynic list-apps failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Verify valid JSON
-    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
-    assert!(parsed.is_ok(), "JSON output is not valid: {}", stdout);
+    assert!(!stdout.is_empty(), "zelynic list-apps produced no output");
 }
 
-/// Test bandwidth rate parsing via command
+/// Test that invalid rate produces error
 #[test]
-#[ignore = "requires root"]
+#[ignore = "requires root + eBPF feature"]
 fn test_rate_parse() {
-    // Test that invalid rate produces error
     let output = zelynic_cmd()
-        .args(["strict", "-d", "invalid", "12345"])
+        .args(["strict-single", "sleep", "-d", "invalid"])
         .output()
-        .expect("Failed to execute zelynic strict");
+        .expect("Failed to execute zelynic strict-single");
 
     assert!(!output.status.success(), "Invalid rate should fail");
 }
 
-/// Test strict -> unstrict cycle
+/// Test strict-single -> unstrict cycle
 #[test]
-#[ignore = "requires root and sleep process"]
+#[ignore = "requires root + eBPF feature"]
 #[allow(clippy::zombie_processes)]
 fn test_strict_unstrict_cycle() {
     // Start a sleep process
@@ -83,12 +79,11 @@ fn test_strict_unstrict_cycle() {
 
     let pid = sleep_cmd.id();
 
-    // Give process time to start
     thread::sleep(Duration::from_millis(100));
 
     // Apply limit
     let output = zelynic_cmd()
-        .args(["strict", "-d", "1mb", &pid.to_string()])
+        .args(["strict-single", "sleep", "-d", "1MB/s", "--duration", "1"])
         .output()
         .expect("Failed to apply limit");
 
@@ -98,22 +93,9 @@ fn test_strict_unstrict_cycle() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Check status
-    let output = zelynic_cmd()
-        .arg("status")
-        .output()
-        .expect("Failed to get status");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(&pid.to_string()),
-        "Status should show limited process"
-    );
-
     // Remove limit
     let output = zelynic_cmd()
-        .args(["unstrict", &pid.to_string()])
+        .args(["unstrict", "sleep"])
         .output()
         .expect("Failed to remove limit");
 
@@ -123,43 +105,7 @@ fn test_strict_unstrict_cycle() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Cleanup
     let _ = sleep_cmd.kill();
-}
-
-/// Test profile save and apply
-#[test]
-#[ignore = "requires root"]
-fn test_profile_save_apply() {
-    // Save a test profile
-    let output = zelynic_cmd()
-        .args(["profile", "save", "test-profile", "-d", "5mb", "-u", "2mb"])
-        .output()
-        .expect("Failed to save profile");
-
-    assert!(
-        output.status.success(),
-        "Failed to save profile: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // List profiles
-    let output = zelynic_cmd()
-        .args(["profile", "list"])
-        .output()
-        .expect("Failed to list profiles");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("test-profile"),
-        "Profile list should contain test-profile"
-    );
-
-    // Cleanup: delete test profile
-    let _ = zelynic_cmd()
-        .args(["profile", "delete", "test-profile"])
-        .output();
 }
 
 /// Test completions generation
@@ -203,23 +149,6 @@ fn test_man_generation() {
     );
 }
 
-/// Test backend info
-#[test]
-fn test_backend_info() {
-    let output = zelynic_cmd()
-        .arg("backend")
-        .output()
-        .expect("Failed to get backend info");
-
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.to_lowercase().contains("backend") || stdout.contains("eBPF"),
-        "Backend info should contain 'backend' or 'eBPF', got: {stdout}"
-    );
-}
-
 /// Test version output
 #[test]
 fn test_version() {
@@ -233,7 +162,8 @@ fn test_version() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Version:")
+            && stdout.contains("Architecture: Wolf")
             && stdout.contains("Source: https://github.com/oxyzenQ/zelynic"),
-        "Version should contain complete zelynic metadata"
+        "Version should contain complete zelynic metadata with Wolf Architecture"
     );
 }

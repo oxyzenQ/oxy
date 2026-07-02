@@ -9,71 +9,87 @@ use colored::Colorize;
 pub(crate) fn print_help_all() {
     println!(
         "{}",
-        "━━━ zelynic — Pure eBPF Network Rate Limiter ━━━".bold()
+        "━━━ zelynic — Per-app Network Rate Limiter ━━━".bold()
     );
     println!();
-    println!("Wolf Architecture: single hooking layer (eBPF), no tc/nft/systemd-wrapper.");
-    println!("Requires kernel 5.13+ (cgroup v2 + cgroup.id file).");
+    println!("Limit any app's download/upload speed using eBPF.");
+    println!("Pure kernel enforcement — no tc, no nft. Requires kernel 5.13+ and root.");
     println!();
     println!("{}", "Commands:".cyan().bold());
     println!();
     println!(
-        "  {} — Real-time traffic observation (read-only)",
-        "zelynic ebpf observe".green()
+        "  {} — Limit a single app",
+        "zelynic strict-single <target> -d <rate> [-up <rate>]".green()
     );
-    println!("    sudo zelynic ebpf observe --interval 5");
-    println!("    sudo zelynic ebpf observe --duration 60 --interval 2");
+    println!("    sudo zelynic strict-single brave -d 100KB/s");
+    println!("    sudo zelynic strict-single firefox -d 1MB/s -up 500KB/s");
+    println!("    sudo zelynic strict-single 73386 -d 100KB/s --watchdog 60");
     println!();
     println!(
-        "  {} — Enforce per-cgroup rate limits",
-        "zelynic ebpf enforce".green()
+        "  {} — Limit multiple apps sharing one rate (group limit)",
+        "zelynic strict-multi <a:b:c> -d <rate> [-up <rate>]".green()
     );
-    println!("    sudo zelynic ebpf enforce --limit firefox:1MB/s");
-    println!("    sudo zelynic ebpf enforce --limit brave:500KB/s --limit unbound:100KB/s");
-    println!(
-        "    sudo zelynic ebpf enforce --limit firefox:1MB/s --watchdog 60 --stats-interval 5"
-    );
-    println!();
-    println!("  {} — Check eBPF support", "zelynic ebpf check".green());
+    println!("    sudo zelynic strict-multi brave:curl:pacman -d 1MB/s");
+    println!("    sudo zelynic strict-multi brave:firefox -d 1MB/s -up 1MB/s");
+    println!("    (all apps collectively share the rate — if one downloads at full");
+    println!("     rate, others get nothing)");
     println!();
     println!(
-        "  {} — Show backend capabilities",
-        "zelynic backend".green()
+        "  {} — Remove limit from one app",
+        "zelynic unstrict <target>".green()
+    );
+    println!("    zelynic unstrict brave");
+    println!();
+    println!(
+        "  {} — Remove ALL limits (emergency reset)",
+        "zelynic unstrict-all".green()
+    );
+    println!();
+    println!(
+        "  {} — Show active limits + watchdog status",
+        "zelynic status".green()
     );
     println!(
-        "  {} — Detailed capability diagnostics",
-        "zelynic backend doctor".green()
+        "  {} — List apps with cgroup IDs",
+        "zelynic list-apps".green()
     );
     println!(
-        "  {} — Generate shell completions",
-        "zelynic completions <shell>".green()
+        "  {} — Real-time traffic monitor (read-only)",
+        "zelynic observe".green()
     );
-    println!("  {} — Generate man page", "zelynic man".green());
+    println!("  {} — Check eBPF support", "zelynic doctor".green());
+    println!();
+    println!("{}", "Global flags:".cyan().bold());
+    println!("  -v, --verbose     Debug output");
+    println!("  --print-json      JSON output (where applicable)");
+    println!("  --no-color        Disable colored output");
     println!();
     println!("{}", "Rate formats:".cyan().bold());
     println!("  500B/s    1KB/s    500KB/s    1MB/s    1GB/s");
-    println!("  (case-insensitive, plain numbers = bytes/second)");
+    println!("  Min: 1KB/s    Max: 1GB/s    (case-insensitive)");
     println!();
     println!("{}", "Target formats:".cyan().bold());
-    println!("  <cgroup_id>     e.g., 73386");
-    println!("  <process_name>  e.g., firefox (resolves all matching cgroups)");
+    println!("  <process_name>  e.g., brave, firefox, curl");
+    println!("  <cgroup_id>     e.g., 73386 (use 'zelynic list-apps' to find)");
     println!();
     println!("{}", "Safety:".cyan().bold());
     println!("  • Watchdog: BPF auto-disables if zelynic crashes (default 30s)");
-    println!("  • Min-rate guard: rejects < 1 KB/s (use --allow-dangerous)");
-    println!("  • Audit log: ~/.local/share/zelynic/audit.jsonl");
+    println!("  • Min-rate guard: rejects < 1KB/s (use --allow-dangerous)");
     println!("  • Fail-safe: BPF returns allow on any error path");
     println!();
     println!("{}", "Examples:".cyan().bold());
-    println!("  # Observe traffic for 30 seconds");
-    println!("  sudo zelynic ebpf observe --duration 30");
+    println!("  # Limit brave to 100KB/s download");
+    println!("  sudo zelynic strict-single brave -d 100KB/s");
     println!();
-    println!("  # Limit Firefox to 1 MB/s download+upload");
-    println!("  sudo zelynic ebpf enforce --limit firefox:1MB/s");
+    println!("  # Limit download tools to share 1MB/s total");
+    println!("  sudo zelynic strict-multi curl:pacman:aria2c -d 1MB/s");
     println!();
-    println!("  # Limit multiple processes, 10s watchdog");
-    println!("  sudo zelynic ebpf enforce \\");
-    println!("    --limit firefox:1MB/s \\");
-    println!("    --limit unbound:100KB/s \\");
-    println!("    --watchdog 10");
+    println!("  # Limit firefox both directions, 60s watchdog");
+    println!("  sudo zelynic strict-single firefox -d 1MB/s -up 500KB/s --watchdog 60");
+    println!();
+    println!("  # Check what's limited");
+    println!("  sudo zelynic status");
+    println!();
+    println!("  # Emergency: remove all limits");
+    println!("  sudo zelynic unstrict-all");
 }

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Command handlers for zelynic CLI subcommands (Wolf Architecture — pure eBPF).
+//! Command handlers for zelynic CLI (Wolf Architecture — pure eBPF).
 
 pub(crate) mod backend;
 pub(crate) mod help;
@@ -9,91 +9,388 @@ pub(crate) mod help;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{BackendCommands, Cli, Commands, EbpfCommands};
+use crate::cli::{Cli, Commands};
 
-/// Top-level CLI dispatch: match parsed subcommand and delegate to focused handlers.
+/// Top-level CLI dispatch.
 pub(crate) fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Some(Commands::Ebpf { command }) => match command {
-            Some(EbpfCommands::Check) => {
-                crate::ebpf::print_observer_status();
-                Ok(())
+        Some(Commands::StrictSingle {
+            target,
+            download,
+            upload,
+            watchdog,
+            allow_dangerous,
+            duration,
+        }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_strict_single(
+                    &target,
+                    download.as_deref(),
+                    upload.as_deref(),
+                    watchdog,
+                    allow_dangerous,
+                    duration,
+                    cli.verbose,
+                )
             }
-            Some(EbpfCommands::Observe { duration, interval }) => {
-                #[cfg(feature = "ebpf")]
-                {
-                    handle_ebpf_observe(duration, interval)
-                }
-                #[cfg(not(feature = "ebpf"))]
-                {
-                    let _ = (duration, interval);
-                    eprintln!(
-                        "eBPF observer not compiled. Rebuild with: cargo build --features ebpf"
-                    );
-                    Err(anyhow::anyhow!("eBPF feature not enabled"))
-                }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (
+                    target,
+                    download,
+                    upload,
+                    watchdog,
+                    allow_dangerous,
+                    duration,
+                    cli.verbose,
+                );
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
             }
-            Some(EbpfCommands::Enforce {
-                limits,
-                stats_interval,
-                duration,
-                watchdog,
-                allow_dangerous,
-            }) => {
-                #[cfg(feature = "ebpf")]
-                {
-                    handle_ebpf_enforce(limits, stats_interval, duration, watchdog, allow_dangerous)
-                }
-                #[cfg(not(feature = "ebpf"))]
-                {
-                    let _ = (limits, stats_interval, duration, watchdog, allow_dangerous);
-                    eprintln!(
-                        "eBPF limiter not compiled. Rebuild with: cargo build --features ebpf"
-                    );
-                    Err(anyhow::anyhow!("eBPF feature not enabled"))
-                }
-            }
-            None => {
-                crate::ebpf::print_observer_status();
-                Ok(())
-            }
-        },
+        }
 
-        Some(Commands::Backend { command }) => match command {
-            Some(BackendCommands::Doctor(args)) => backend::handle_doctor(args.json),
-            None => backend::handle_backend_info(),
-        },
+        Some(Commands::StrictMulti {
+            targets,
+            download,
+            upload,
+            watchdog,
+            allow_dangerous,
+            duration,
+        }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_strict_multi(
+                    &targets,
+                    download.as_deref(),
+                    upload.as_deref(),
+                    watchdog,
+                    allow_dangerous,
+                    duration,
+                    cli.verbose,
+                )
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (
+                    targets,
+                    download,
+                    upload,
+                    watchdog,
+                    allow_dangerous,
+                    duration,
+                    cli.verbose,
+                );
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::Unstrict { target }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_unstrict(&target, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (target, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::UnstrictAll) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_unstrict_all(cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::Status) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_status(cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::ListApps) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_list_apps()
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::Observe { interval, duration }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_observe(interval, duration, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (interval, duration, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::Doctor) => crate::capabilities::run_doctor(false),
 
         Some(Commands::Completions { shell }) => backend::handle_completions(&shell),
 
         Some(Commands::Man) => backend::generate_man_page(),
 
         None => {
-            Cli::parse_from(["zelynic", "--help"]);
-            Ok(())
+            if cli.help_all {
+                help::print_help_all();
+                Ok(())
+            } else {
+                Cli::parse_from(["zelynic", "--help"]);
+                Ok(())
+            }
         }
     }
 }
 
-/// eBPF observer: load BPF program, attach, read counters, print summary.
+// ━━ Command handlers (ebpf feature) ━━
+
 #[cfg(feature = "ebpf")]
-fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
+fn handle_strict_single(
+    target_str: &str,
+    download: Option<&str>,
+    upload: Option<&str>,
+    watchdog: u64,
+    allow_dangerous: bool,
+    duration: u64,
+    verbose: bool,
+) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let rates = parse_rates(download, upload, allow_dangerous)?;
+
+    if rates.download.is_none() && rates.upload.is_none() {
+        return Err(anyhow::anyhow!(
+            "No rate specified. Use -d <rate> for download, -up <rate> for upload.\n\
+             Example: zelynic strict-single brave -d 100KB/s"
+        ));
+    }
+
+    let target = Target::parse(target_str);
+    let watchdog = if watchdog < 5 { 5 } else { watchdog };
+
+    let mut limiter = Limiter::attach(verbose)?;
+    limiter.refresh_watchdog(watchdog)?;
+    eprintln!("[limiter] Watchdog armed: {watchdog}s timeout");
+
+    let applied = limiter.apply_single(&target, &rates)?;
+    if applied == 0 {
+        eprintln!("[limiter] No policies could be applied. Exiting.");
+        limiter.detach();
+        return Ok(());
+    }
+
+    eprintln!(
+        "[limiter] {applied} polic{} applied. Enforcing.",
+        if applied == 1 { "y" } else { "ies" }
+    );
+    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {watchdog}s");
+    eprintln!("[limiter] Press Ctrl+C to stop\n");
+
+    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_strict_multi(
+    targets_str: &str,
+    download: Option<&str>,
+    upload: Option<&str>,
+    watchdog: u64,
+    allow_dangerous: bool,
+    duration: u64,
+    verbose: bool,
+) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let rates = parse_rates(download, upload, allow_dangerous)?;
+
+    if rates.download.is_none() && rates.upload.is_none() {
+        return Err(anyhow::anyhow!(
+            "No rate specified. Use -d <rate> for download, -up <rate> for upload.\n\
+             Example: zelynic strict-multi brave:curl -d 1MB/s"
+        ));
+    }
+
+    let targets: Vec<Target> = targets_str
+        .split(':')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(Target::parse)
+        .collect();
+
+    if targets.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No targets specified. Use colon-separated list.\n\
+             Example: zelynic strict-multi brave:curl:pacman -d 1MB/s"
+        ));
+    }
+
+    let watchdog = if watchdog < 5 { 5 } else { watchdog };
+
+    let mut limiter = Limiter::attach(verbose)?;
+    limiter.refresh_watchdog(watchdog)?;
+    eprintln!("[limiter] Watchdog armed: {watchdog}s timeout");
+
+    let applied = limiter.apply_group(&targets, &rates)?;
+    if applied == 0 {
+        eprintln!("[limiter] No policies could be applied. Exiting.");
+        limiter.detach();
+        return Ok(());
+    }
+
+    eprintln!(
+        "[limiter] {applied} polic{} applied (shared group). Enforcing.",
+        if applied == 1 { "y" } else { "ies" }
+    );
+    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {watchdog}s");
+    eprintln!("[limiter] Press Ctrl+C to stop\n");
+
+    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_unstrict(target_str: &str, verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let target = Target::parse(target_str);
+
+    // Attach temporarily (we need BPF loaded to access maps).
+    let mut limiter = Limiter::attach(verbose)?;
+    let removed = limiter.unstrict(&target)?;
+
+    if removed == 0 {
+        eprintln!("[limiter] No active limits found for '{target_str}'");
+    } else {
+        eprintln!(
+            "[limiter] Removed {removed} limit{} for '{target_str}'",
+            if removed == 1 { "" } else { "s" }
+        );
+    }
+
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_unstrict_all(verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::Limiter;
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let mut limiter = Limiter::attach(verbose)?;
+    limiter.unstrict_all()?;
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_status(verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::Limiter;
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let mut limiter = Limiter::attach(verbose)?;
+    limiter.refresh_identity();
+    limiter.print_status();
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_list_apps() -> Result<()> {
+    use crate::ebpf::identity::IdentityMap;
+    use colored::Colorize;
+
+    let mut identity = IdentityMap::new();
+    let count = identity.refresh();
+
+    println!("{}", "━━━ Apps with cgroup IDs ━━━".bold());
+    println!("  {} cgroups resolved\n", count);
+
+    let mut entries: Vec<_> = identity.all().into_iter().collect();
+    entries.sort_by(|a, b| a.comm.cmp(&b.comm));
+
+    println!("  {:<30} {:>10} {:>8}", "PROCESS", "CGROUP ID", "UID");
+    println!("  {}", "─".repeat(50));
+
+    for id in entries {
+        if id.comm.is_empty() {
+            continue;
+        }
+        println!(
+            "  {:<30} {:>10} {:>8}",
+            id.comm,
+            format!("cg:{}", id.cgroup_id),
+            id.uid
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn handle_observe(interval: u64, duration: u64, verbose: bool) -> Result<()> {
     use crate::ebpf::loader::Observer;
     use std::time::{Duration, Instant};
 
     if !nix::unistd::geteuid().is_root() {
-        eprintln!("eBPF observer requires root. Run with sudo.");
-        return Err(anyhow::anyhow!("root required for eBPF observer"));
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
     }
 
     let mut observer = Observer::attach()?;
-
     let resolved = observer.refresh_identity();
-    eprintln!(
-        "[ebpf] Identity map: {} cgroup{} resolved",
-        resolved,
-        if resolved == 1 { "" } else { "s" }
-    );
+    if verbose {
+        eprintln!("[ebpf] {} cgroups resolved", resolved);
+    }
     eprintln!("[ebpf] Press Ctrl+C to stop\n");
 
     let start = Instant::now();
@@ -108,7 +405,6 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
         }
 
         if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
-            eprintln!("\n[ebpf] Duration reached, stopping...");
             break;
         }
 
@@ -121,184 +417,82 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
     Ok(())
 }
 
-/// eBPF limiter: load BPF program, apply policies, enforce rates, print stats.
+// ━━ Helpers ━━
+
 #[cfg(feature = "ebpf")]
-fn handle_ebpf_enforce(
-    limits: Vec<String>,
-    stats_interval: u64,
-    duration: u64,
-    watchdog: u64,
+fn parse_rates(
+    download: Option<&str>,
+    upload: Option<&str>,
     allow_dangerous: bool,
-) -> Result<()> {
-    use crate::ebpf::audit::{AuditEvent, AuditLog};
-    use crate::ebpf::limiter::{default_burst, parse_policy_spec, Limiter, PolicySpec};
-    use std::io::{self, BufRead, Write};
+) -> Result<crate::ebpf::limiter::RateSpec> {
+    use crate::ebpf::limiter::{parse_rate, validate_rate, MIN_RATE};
+
+    let dl = match download {
+        Some(s) => {
+            let rate = parse_rate(s)?;
+            if !allow_dangerous {
+                validate_rate(rate)?;
+            } else if rate < MIN_RATE {
+                eprintln!(
+                    "[limiter] WARNING: rate below minimum — overriding with --allow-dangerous"
+                );
+            }
+            Some(rate)
+        }
+        None => None,
+    };
+
+    let ul = match upload {
+        Some(s) => {
+            let rate = parse_rate(s)?;
+            if !allow_dangerous {
+                validate_rate(rate)?;
+            } else if rate < MIN_RATE {
+                eprintln!(
+                    "[limiter] WARNING: rate below minimum — overriding with --allow-dangerous"
+                );
+            }
+            Some(rate)
+        }
+        None => None,
+    };
+
+    Ok(crate::ebpf::limiter::RateSpec {
+        download: dl,
+        upload: ul,
+    })
+}
+
+#[cfg(feature = "ebpf")]
+fn run_enforcement_loop(
+    limiter: &mut crate::ebpf::limiter::Limiter,
+    watchdog: u64,
+    duration: u64,
+    verbose: bool,
+) {
     use std::time::{Duration, Instant};
 
-    if limits.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No policies specified. Use --limit <target>:<rate>\n\
-             Example: zelynic ebpf enforce --limit firefox:1MB/s"
-        ));
-    }
-
-    if !nix::unistd::geteuid().is_root() {
-        eprintln!("eBPF limiter requires root. Run with sudo.");
-        return Err(anyhow::anyhow!("root required for eBPF limiter"));
-    }
-
-    let watchdog = if watchdog < 5 { 5 } else { watchdog };
-
-    let audit = AuditLog::open();
-    eprintln!("[limiter] Audit log: {}", audit.path().display());
-
-    const MIN_RATE: u64 = 1024;
-    const WARN_RATE: u64 = 100_000;
-
-    let mut specs: Vec<PolicySpec> = Vec::new();
-    for (i, limit_str) in limits.iter().enumerate() {
-        let (target, rate_bps) = parse_policy_spec(limit_str)?;
-        let burst_bytes = default_burst(rate_bps);
-
-        if rate_bps < MIN_RATE {
-            if !allow_dangerous {
-                audit.log(&AuditEvent::RateRejected {
-                    target: target.clone(),
-                    rate_bps,
-                    reason: format!("below minimum {} B/s (use --allow-dangerous)", MIN_RATE),
-                });
-                return Err(anyhow::anyhow!(
-                    "Rate {} B/s for '{}' is below minimum ({} B/s).\n\
-                     Such a low rate will make the target unusable.\n\
-                     Use --allow-dangerous to override.",
-                    rate_bps,
-                    target,
-                    MIN_RATE
-                ));
-            }
-            eprintln!(
-                "[limiter] WARNING: rate for '{}' is below minimum ({} B/s) — overriding with --allow-dangerous",
-                target, rate_bps
-            );
-        }
-
-        eprintln!(
-            "[limiter] Parsed policy #{}: {} → {}/s (burst: {})",
-            i + 1,
-            target,
-            format_burst(rate_bps),
-            format_burst(burst_bytes)
-        );
-
-        if rate_bps < WARN_RATE && !allow_dangerous {
-            eprintln!(
-                "\n  ⚠ WARNING: Limiting '{}' to {}/s may make it unusable for normal browsing.",
-                target,
-                format_burst(rate_bps)
-            );
-            eprint!("  Continue? [y/N] ");
-            let _ = io::stderr().flush();
-            let mut input = String::new();
-            if io::stdin().lock().read_line(&mut input).is_err() {
-                eprintln!("\n[limiter] Could not read input. Aborting.");
-                return Ok(());
-            }
-            if !input.trim().eq_ignore_ascii_case("y") {
-                eprintln!("[limiter] Aborted by user.");
-                return Ok(());
-            }
-        }
-
-        specs.push(PolicySpec {
-            target,
-            rate_bps,
-            burst_bytes,
-        });
-    }
-
-    let mut limiter = Limiter::attach()?;
-
-    limiter.refresh_watchdog(watchdog)?;
-    eprintln!("[limiter] Watchdog armed: {}s timeout", watchdog);
-
-    let applied = limiter.apply_policies(&specs)?;
-
-    audit.log(&AuditEvent::EnforceStart {
-        policy_count: applied,
-    });
-
-    if applied == 0 {
-        eprintln!("[limiter] No policies could be applied. Exiting.");
-        limiter.detach();
-        return Ok(());
-    }
-
-    eprintln!(
-        "[limiter] {} polic{} applied. Enforcing.\n",
-        applied,
-        if applied == 1 { "y" } else { "ies" }
-    );
-    eprintln!(
-        "[limiter] Safety: if zelynic crashes, BPF auto-disables in {}s",
-        watchdog
-    );
-    eprintln!("[limiter] Press Ctrl+C to stop\n");
-
     let start = Instant::now();
-    let stats_dur = if stats_interval > 0 {
-        Duration::from_secs(stats_interval)
-    } else {
-        Duration::from_secs(u64::MAX / 2)
-    };
+    let stats_interval = Duration::from_secs(5);
     let mut last_print = Instant::now();
-    let mut last_watchdog_log = Instant::now();
 
     loop {
         if let Err(e) = limiter.refresh_watchdog(watchdog) {
             eprintln!("[limiter] WARNING: watchdog refresh failed: {e}");
         }
 
-        if last_print.elapsed() >= stats_dur {
-            limiter.print_stats();
-            limiter.print_watchdog_status();
+        if last_print.elapsed() >= stats_interval {
+            limiter.print_status();
             last_print = Instant::now();
         }
 
-        if last_watchdog_log.elapsed() >= Duration::from_secs(5) {
-            if limiter.read_watchdog().is_ok() {
-                audit.log(&AuditEvent::WatchdogRefresh {
-                    remaining_secs: watchdog,
-                });
-            }
-            last_watchdog_log = Instant::now();
-        }
-
         if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
-            eprintln!("\n[limiter] Duration reached, stopping...");
-            audit.log(&AuditEvent::EnforceStop {
-                reason: "duration reached".to_string(),
-            });
+            if verbose {
+                eprintln!("\n[limiter] Duration reached, stopping...");
+            }
             break;
         }
 
         std::thread::sleep(Duration::from_millis(200));
-    }
-
-    limiter.print_stats();
-    limiter.print_watchdog_status();
-    limiter.detach();
-    Ok(())
-}
-
-#[cfg(feature = "ebpf")]
-fn format_burst(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
