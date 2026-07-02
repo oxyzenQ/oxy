@@ -24,7 +24,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use aya::{
-    maps::HashMap as BpfHashMap,
+    maps::{Array as BpfArray, HashMap as BpfHashMap},
     programs::{CgroupAttachMode, CgroupSkb, CgroupSkbAttachType},
     Ebpf,
 };
@@ -208,9 +208,12 @@ impl Limiter {
     /// automatically — no manual `bpftool prog unload` needed.
     ///
     /// Uses CLOCK_MONOTONIC to match bpf_ktime_get_ns().
+    ///
+    /// Note: watchdog_deadline is a BPF_MAP_TYPE_ARRAY (single entry at index 0),
+    /// so we use aya::maps::Array, not HashMap.
     pub fn refresh_watchdog(&mut self, timeout_secs: u64) -> Result<()> {
         let bpf = self.bpf.as_mut().context("BPF not loaded")?;
-        let mut watchdog: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
+        let mut watchdog: BpfArray<_, u64> = BpfArray::try_from(
             bpf.map_mut("watchdog_deadline")
                 .context("watchdog_deadline map not found")?,
         )
@@ -219,9 +222,9 @@ impl Limiter {
         let now = monotonic_ns();
         let deadline = now.saturating_add(timeout_secs.saturating_mul(1_000_000_000));
 
-        // Key 0 (ARRAY map, single entry).
+        // Array map: set(index, value, flags). Index 0 = the single entry.
         watchdog
-            .insert(0, deadline, 0)
+            .set(0, deadline, 0)
             .map_err(|e| anyhow!("Failed to refresh watchdog: {e}"))?;
         Ok(())
     }
@@ -322,15 +325,20 @@ impl Limiter {
     }
 
     /// Read current watchdog deadline (monotonic ns). Returns None if not set.
+    ///
+    /// Note: watchdog_deadline is a BPF_MAP_TYPE_ARRAY, so we use aya::maps::Array.
+    /// Array::get takes &u32 (index reference), not a key value.
     pub fn read_watchdog(&self) -> Result<Option<u64>> {
         let bpf = self.bpf.as_ref().context("BPF not loaded")?;
-        let map: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
+        let map: BpfArray<_, u64> = BpfArray::try_from(
             bpf.map("watchdog_deadline")
                 .context("watchdog_deadline map not found")?,
         )
         .context("Failed to access watchdog_deadline map")?;
 
-        match map.get(&0, 0) {
+        // Array::get takes &u32 index. Index 0 = the single entry.
+        let index: u32 = 0;
+        match map.get(&index, 0) {
             Ok(deadline) => Ok(Some(deadline)),
             Err(_) => Ok(None),
         }
