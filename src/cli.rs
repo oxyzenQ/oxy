@@ -56,7 +56,7 @@ pub enum Commands {
     ///
     /// Examples:
     ///   zelynic strict-single brave -d 100KB/s
-    ///   zelynic strict-single firefox -d 1MB/s -up 500KB/s
+    ///   zelynic strict-single firefox -d 1MB/s -u 500KB/s
     ///   zelynic strict-single 73386 -d 100KB/s --watchdog 60
     #[command(name = "strict-single")]
     StrictSingle {
@@ -68,7 +68,7 @@ pub enum Commands {
         download: Option<String>,
 
         /// Upload rate limit (e.g., 100KB/s, 1MB/s)
-        #[arg(short = 'u', long = "upload", alias = "up")]
+        #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
 
         /// Watchdog timeout in seconds (default: 30, min: 5)
@@ -91,7 +91,7 @@ pub enum Commands {
     ///
     /// Examples:
     ///   zelynic strict-multi brave:curl:pacman -d 1MB/s
-    ///   zelynic strict-multi brave:firefox -d 1MB/s -up 1MB/s
+    ///   zelynic strict-multi brave:firefox -d 1MB/s -u 1MB/s
     #[command(name = "strict-multi")]
     StrictMulti {
         /// Targets separated by colons (e.g., brave:curl:pacman)
@@ -102,7 +102,7 @@ pub enum Commands {
         download: Option<String>,
 
         /// Upload rate limit (shared across all targets)
-        #[arg(short = 'u', long = "upload", alias = "up")]
+        #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
 
         /// Watchdog timeout in seconds (default: 30, min: 5)

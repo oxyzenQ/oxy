@@ -184,7 +184,9 @@ impl Limiter {
             )
             .context("Failed to attach enforce_ul (egress)")?;
 
-        eprintln!("[limiter] Attached to {cgroup_path} (ingress + egress)");
+        if verbose {
+            eprintln!("[limiter] Attached to {cgroup_path} (ingress + egress)");
+        }
 
         let mut limiter = Limiter {
             bpf: Some(bpf),
@@ -206,26 +208,18 @@ impl Limiter {
     pub fn apply_single(&mut self, target: &Target, rates: &RateSpec) -> Result<usize> {
         let cgroup_ids = self.resolve_target(target)?;
         if cgroup_ids.is_empty() {
-            eprintln!(
-                "[limiter] WARNING: no cgroup found for '{:?}' — skipping",
-                target
-            );
             return Ok(0);
         }
 
         let mut applied = 0usize;
         for cgroup_id in &cgroup_ids {
-            let label = self.identity.label(*cgroup_id);
-
             if let Some(dl_rate) = rates.download {
                 self.write_policy(*cgroup_id, dl_rate, 0, Direction::Download)?;
-                eprintln!("[limiter] {label} download → {}/s", format_rate(dl_rate));
                 applied += 1;
             }
 
             if let Some(ul_rate) = rates.upload {
                 self.write_policy(*cgroup_id, ul_rate, 0, Direction::Upload)?;
-                eprintln!("[limiter] {label} upload → {}/s", format_rate(ul_rate));
                 applied += 1;
             }
         }
@@ -241,10 +235,9 @@ impl Limiter {
         for target in targets {
             let ids = self.resolve_target(target)?;
             if ids.is_empty() {
-                eprintln!(
-                    "[limiter] WARNING: no cgroup found for '{:?}' — skipping",
-                    target
-                );
+                if self.verbose {
+                    eprintln!("[limiter] no cgroup found for '{:?}' — skipping", target);
+                }
                 continue;
             }
             all_cgroup_ids.extend(ids);
@@ -277,21 +270,23 @@ impl Limiter {
         }
 
         let group_label = format!("group:{}", group_id);
-        if let Some(dl_rate) = rates.download {
-            eprintln!(
-                "[limiter] {} download → {}/s (shared by {} cgroups)",
-                group_label,
-                format_rate(dl_rate),
-                all_cgroup_ids.len()
-            );
-        }
-        if let Some(ul_rate) = rates.upload {
-            eprintln!(
-                "[limiter] {} upload → {}/s (shared by {} cgroups)",
-                group_label,
-                format_rate(ul_rate),
-                all_cgroup_ids.len()
-            );
+        if self.verbose {
+            if let Some(dl_rate) = rates.download {
+                eprintln!(
+                    "[limiter] {} download → {}/s (shared by {} cgroups)",
+                    group_label,
+                    format_rate(dl_rate),
+                    all_cgroup_ids.len()
+                );
+            }
+            if let Some(ul_rate) = rates.upload {
+                eprintln!(
+                    "[limiter] {} upload → {}/s (shared by {} cgroups)",
+                    group_label,
+                    format_rate(ul_rate),
+                    all_cgroup_ids.len()
+                );
+            }
         }
 
         Ok(applied)
@@ -307,11 +302,15 @@ impl Limiter {
             let mut found = false;
 
             // Remove from dl + ul policy maps.
-            if self.delete_policy(*cgroup_id, Direction::Download).is_ok() {
-                found = true;
+            if let Ok(deleted) = self.delete_policy(*cgroup_id, Direction::Download) {
+                if deleted {
+                    found = true;
+                }
             }
-            if self.delete_policy(*cgroup_id, Direction::Upload).is_ok() {
-                found = true;
+            if let Ok(deleted) = self.delete_policy(*cgroup_id, Direction::Upload) {
+                if deleted {
+                    found = true;
+                }
             }
 
             if found {
@@ -325,13 +324,18 @@ impl Limiter {
 
     /// Remove ALL policies (unstrict-all).
     pub fn unstrict_all(&mut self) -> Result<usize> {
-        let dl_count = self.clear_map("cgroup_policy_dl")?;
-        let ul_count = self.clear_map("cgroup_policy_ul")?;
-        let _ = self.clear_map("cgroup_bucket_dl")?;
-        let _ = self.clear_map("cgroup_bucket_ul")?;
-        let _ = self.clear_map("group_bucket_dl")?;
-        let _ = self.clear_map("group_bucket_ul")?;
-        let _ = self.clear_map("cgroup_limiter_stats")?;
+        // Clear policy maps (PolicyRaw, size 24).
+        let dl_count = self.clear_policy_map("cgroup_policy_dl")?;
+        let ul_count = self.clear_policy_map("cgroup_policy_ul")?;
+
+        // Clear bucket maps (BucketRaw, size 16).
+        let _ = self.clear_bucket_map("cgroup_bucket_dl");
+        let _ = self.clear_bucket_map("cgroup_bucket_ul");
+        let _ = self.clear_bucket_map("group_bucket_dl");
+        let _ = self.clear_bucket_map("group_bucket_ul");
+
+        // Clear stats map (LimiterStatsRaw, size 32).
+        let _ = self.clear_stats_map("cgroup_limiter_stats");
 
         let total = dl_count + ul_count;
         eprintln!("[limiter] Unstrict-all: {} policies removed", total);
@@ -393,8 +397,12 @@ impl Limiter {
 
         for (cgroup_id, (dl, ul)) in &sorted {
             let label = self.identity.label(*cgroup_id);
-            let dl_str = dl.map(format_rate).unwrap_or_else(|| "—".to_string());
-            let ul_str = ul.map(format_rate).unwrap_or_else(|| "—".to_string());
+            let dl_str = dl
+                .map(|r| format!("{}/s", format_rate(r)))
+                .unwrap_or_else(|| "—".to_string());
+            let ul_str = ul
+                .map(|r| format!("{}/s", format_rate(r)))
+                .unwrap_or_else(|| "—".to_string());
             let s = stats.iter().find(|(id, _)| id == cgroup_id);
             let allowed = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
             let dropped = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
@@ -454,8 +462,8 @@ impl Limiter {
         Ok(())
     }
 
-    /// Delete a policy from BPF map.
-    fn delete_policy(&mut self, cgroup_id: u32, direction: Direction) -> Result<()> {
+    /// Delete a policy from BPF map. Returns Ok(true) if deleted, Ok(false) if not found.
+    fn delete_policy(&mut self, cgroup_id: u32, direction: Direction) -> Result<bool> {
         let map_name = format!("cgroup_policy_{}", direction.suffix());
         let bpf = self.bpf.as_mut().context("BPF not loaded")?;
         let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
@@ -464,9 +472,10 @@ impl Limiter {
         )
         .context(format!("Failed to access {map_name}"))?;
 
-        map.remove(&cgroup_id)
-            .map_err(|e| anyhow!("Failed to delete policy: {e}"))?;
-        Ok(())
+        match map.remove(&cgroup_id) {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false), // key not found = no policy to delete
+        }
     }
 
     /// Read all policies from a direction map.
@@ -502,11 +511,10 @@ impl Limiter {
         Ok(results)
     }
 
-    /// Clear all entries from a map. Returns count removed.
-    fn clear_map(&mut self, map_name: &str) -> Result<usize> {
+    /// Clear all entries from a policy map. Returns count removed.
+    fn clear_policy_map(&mut self, map_name: &str) -> Result<usize> {
         let bpf = self.bpf.as_mut().context("BPF not loaded")?;
 
-        // Read all keys first.
         let keys: Vec<u32> = {
             let map: BpfHashMap<_, u32, PolicyRaw> =
                 BpfHashMap::try_from(bpf.map(map_name).context(format!("{map_name} not found"))?)
@@ -516,8 +524,57 @@ impl Limiter {
 
         let count = keys.len();
 
-        // Delete each key.
         let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
+            bpf.map_mut(map_name)
+                .context(format!("{map_name} not found"))?,
+        )
+        .context(format!("Failed to access {map_name} (mut)"))?;
+        for key in &keys {
+            let _ = map.remove(key);
+        }
+
+        Ok(count)
+    }
+
+    /// Clear all entries from a bucket map (BucketRaw).
+    fn clear_bucket_map(&mut self, map_name: &str) -> Result<usize> {
+        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
+
+        let keys: Vec<u32> = {
+            let map: BpfHashMap<_, u32, BucketRaw> =
+                BpfHashMap::try_from(bpf.map(map_name).context(format!("{map_name} not found"))?)
+                    .context(format!("Failed to access {map_name}"))?;
+            map.iter().flatten().map(|(k, _)| k).collect()
+        };
+
+        let count = keys.len();
+
+        let mut map: BpfHashMap<_, u32, BucketRaw> = BpfHashMap::try_from(
+            bpf.map_mut(map_name)
+                .context(format!("{map_name} not found"))?,
+        )
+        .context(format!("Failed to access {map_name} (mut)"))?;
+        for key in &keys {
+            let _ = map.remove(key);
+        }
+
+        Ok(count)
+    }
+
+    /// Clear all entries from the stats map (LimiterStatsRaw).
+    fn clear_stats_map(&mut self, map_name: &str) -> Result<usize> {
+        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
+
+        let keys: Vec<u32> = {
+            let map: BpfHashMap<_, u32, LimiterStatsRaw> =
+                BpfHashMap::try_from(bpf.map(map_name).context(format!("{map_name} not found"))?)
+                    .context(format!("Failed to access {map_name}"))?;
+            map.iter().flatten().map(|(k, _)| k).collect()
+        };
+
+        let count = keys.len();
+
+        let mut map: BpfHashMap<_, u32, LimiterStatsRaw> = BpfHashMap::try_from(
             bpf.map_mut(map_name)
                 .context(format!("{map_name} not found"))?,
         )
@@ -561,6 +618,16 @@ impl Limiter {
             Ok(deadline) => Ok(Some(deadline)),
             Err(_) => Ok(None),
         }
+    }
+
+    /// Read all policies from a direction map (public for status display).
+    pub fn read_policies_public(&self, direction: Direction) -> Result<Vec<(u32, PolicyRaw)>> {
+        self.read_policies(direction)
+    }
+
+    /// Read enforcement stats (public for status display).
+    pub fn read_stats_public(&self) -> Result<Vec<(u32, LimiterStatsRaw)>> {
+        self.read_stats()
     }
 
     /// Borrow identity map.
@@ -698,7 +765,7 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 pub fn format_rate(bps: u64) -> String {
-    format!("{}/s", format_bytes(bps))
+    format_bytes(bps)
 }
 
 #[cfg(test)]

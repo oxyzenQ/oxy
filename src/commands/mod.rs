@@ -189,7 +189,7 @@ fn handle_strict_single(
 
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
-            "No rate specified. Use -d <rate> for download, -up <rate> for upload.\n\
+            "No rate specified. Use -d <rate> for download, -u <rate> for upload.\n\
              Example: zelynic strict-single brave -d 100KB/s"
         ));
     }
@@ -199,21 +199,45 @@ fn handle_strict_single(
 
     let mut limiter = Limiter::attach(verbose)?;
     limiter.refresh_watchdog(watchdog)?;
-    eprintln!("[limiter] Watchdog armed: {watchdog}s timeout");
 
     let applied = limiter.apply_single(&target, &rates)?;
     if applied == 0 {
-        eprintln!("[limiter] No policies could be applied. Exiting.");
+        eprintln!("No cgroup found for '{target_str}'. Nothing to limit.");
         limiter.detach();
         return Ok(());
     }
 
+    // Clean one-liner summary (quiet by default).
+    let dl_str = rates
+        .download
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let ul_str = rates
+        .upload
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let parts: Vec<&str> = [
+        if !dl_str.is_empty() {
+            dl_str.as_str()
+        } else {
+            ""
+        },
+        if !ul_str.is_empty() {
+            ul_str.as_str()
+        } else {
+            ""
+        },
+    ]
+    .iter()
+    .filter(|s| !s.is_empty())
+    .copied()
+    .collect();
     eprintln!(
-        "[limiter] {applied} polic{} applied. Enforcing.",
+        "Limiting '{target_str}' to {} ({} polic{}, Ctrl+C to stop)",
+        parts.join(" + "),
+        applied,
         if applied == 1 { "y" } else { "ies" }
     );
-    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {watchdog}s");
-    eprintln!("[limiter] Press Ctrl+C to stop\n");
 
     run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
     limiter.detach();
@@ -264,21 +288,43 @@ fn handle_strict_multi(
 
     let mut limiter = Limiter::attach(verbose)?;
     limiter.refresh_watchdog(watchdog)?;
-    eprintln!("[limiter] Watchdog armed: {watchdog}s timeout");
 
     let applied = limiter.apply_group(&targets, &rates)?;
     if applied == 0 {
-        eprintln!("[limiter] No policies could be applied. Exiting.");
+        eprintln!("No cgroups found for any target in '{targets_str}'. Nothing to limit.");
         limiter.detach();
         return Ok(());
     }
 
+    // Clean one-liner summary (quiet by default).
+    let dl_str = rates
+        .download
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let ul_str = rates
+        .upload
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let parts: Vec<&str> = [
+        if !dl_str.is_empty() {
+            dl_str.as_str()
+        } else {
+            ""
+        },
+        if !ul_str.is_empty() {
+            ul_str.as_str()
+        } else {
+            ""
+        },
+    ]
+    .iter()
+    .filter(|s| !s.is_empty())
+    .copied()
+    .collect();
     eprintln!(
-        "[limiter] {applied} polic{} applied (shared group). Enforcing.",
-        if applied == 1 { "y" } else { "ies" }
+        "Limiting group '{targets_str}' to {} ({applied} policies, Ctrl+C to stop)",
+        parts.join(" + ")
     );
-    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {watchdog}s");
-    eprintln!("[limiter] Press Ctrl+C to stop\n");
 
     run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
     limiter.detach();
@@ -478,21 +524,63 @@ fn run_enforcement_loop(
 
     loop {
         if let Err(e) = limiter.refresh_watchdog(watchdog) {
-            eprintln!("[limiter] WARNING: watchdog refresh failed: {e}");
+            if verbose {
+                eprintln!("[limiter] WARNING: watchdog refresh failed: {e}");
+            }
         }
 
         if last_print.elapsed() >= stats_interval {
-            limiter.print_status();
+            if verbose {
+                // Verbose: full status table.
+                limiter.print_status();
+            } else {
+                // Quiet: one-line summary.
+                print_compact_status(limiter);
+            }
             last_print = Instant::now();
         }
 
         if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
-            if verbose {
-                eprintln!("\n[limiter] Duration reached, stopping...");
-            }
             break;
         }
 
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Print a compact one-line status (quiet mode).
+#[cfg(feature = "ebpf")]
+fn print_compact_status(limiter: &crate::ebpf::limiter::Limiter) {
+    use crate::ebpf::limiter::Direction;
+    use std::collections::HashMap;
+
+    let dl_policies = limiter
+        .read_policies_public(Direction::Download)
+        .unwrap_or_default();
+    let ul_policies = limiter
+        .read_policies_public(Direction::Upload)
+        .unwrap_or_default();
+    let stats = limiter.read_stats_public().unwrap_or_default();
+
+    if dl_policies.is_empty() && ul_policies.is_empty() {
+        return;
+    }
+
+    let mut combined: HashMap<u32, (Option<u64>, Option<u64>)> = HashMap::new();
+    for (id, p) in &dl_policies {
+        combined.entry(*id).or_default().0 = Some(p.rate_bps);
+    }
+    for (id, p) in &ul_policies {
+        combined.entry(*id).or_default().1 = Some(p.rate_bps);
+    }
+
+    let total_allowed: u64 = stats.iter().map(|(_, s)| s.bytes_allowed).sum();
+    let total_dropped: u64 = stats.iter().map(|(_, s)| s.bytes_dropped).sum();
+    let active = combined.len();
+
+    eprintln!(
+        "  [{active} limits] allowed: {} | dropped: {}",
+        crate::ebpf::limiter::format_bytes(total_allowed),
+        crate::ebpf::limiter::format_bytes(total_dropped),
+    );
 }
