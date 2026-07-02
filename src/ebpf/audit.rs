@@ -77,12 +77,11 @@ impl AuditLog {
                     "burst_bytes": burst_bytes,
                 }),
             ),
-            AuditEvent::EnforceStop { reason } => {
-                ("enforce_stop", json!({ "reason": reason }))
-            }
-            AuditEvent::WatchdogRefresh { remaining_secs } => {
-                ("watchdog_refresh", json!({ "remaining_secs": remaining_secs }))
-            }
+            AuditEvent::EnforceStop { reason } => ("enforce_stop", json!({ "reason": reason })),
+            AuditEvent::WatchdogRefresh { remaining_secs } => (
+                "watchdog_refresh",
+                json!({ "remaining_secs": remaining_secs }),
+            ),
             AuditEvent::RateRejected {
                 target,
                 rate_bps,
@@ -100,7 +99,11 @@ impl AuditLog {
         entry["ts"] = json!(Utc::now().to_rfc3339());
         entry["event"] = json!(event_type);
 
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&self.path) {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
             let _ = writeln!(file, "{entry}");
         }
     }
@@ -114,8 +117,7 @@ impl AuditLog {
 /// Compute the audit log path.
 fn audit_path() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-            .join(".local/share/zelynic/audit.jsonl")
+        PathBuf::from(home).join(".local/share/zelynic/audit.jsonl")
     } else {
         PathBuf::from("/tmp/zelynic-audit.jsonl")
     }
@@ -131,7 +133,9 @@ mod tests {
         // With HOME set, path should be under ~/.local/share/zelynic/
         env::set_var("HOME", "/tmp/test-home-zelynic");
         let path = audit_path();
-        assert!(path.to_string_lossy().contains(".local/share/zelynic/audit.jsonl"));
+        assert!(path
+            .to_string_lossy()
+            .contains(".local/share/zelynic/audit.jsonl"));
     }
 
     #[test]

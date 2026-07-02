@@ -176,9 +176,11 @@ impl Limiter {
             .as_mut()
             .context("BPF not loaded — call attach() first")?;
 
-        let mut policy_map: BpfHashMap<_, u32, PolicyRaw> =
-            BpfHashMap::try_from(bpf.map_mut("cgroup_policy").context("cgroup_policy map not found")?)
-                .context("Failed to access cgroup_policy map")?;
+        let mut policy_map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
+            bpf.map_mut("cgroup_policy")
+                .context("cgroup_policy map not found")?,
+        )
+        .context("Failed to access cgroup_policy map")?;
 
         let mut applied = 0usize;
         for (cgroup_id, raw, label) in resolved {
@@ -258,10 +260,8 @@ impl Limiter {
         .context("Failed to access cgroup_limiter_stats map")?;
 
         let mut results = Vec::new();
-        for entry in map.iter() {
-            if let Ok((key, value)) = entry {
-                results.push((key, value));
-            }
+        for (key, value) in map.iter().flatten() {
+            results.push((key, value));
         }
         Ok(results)
     }
@@ -269,15 +269,15 @@ impl Limiter {
     /// Read bucket state from BPF map (diagnostic).
     pub fn read_buckets(&self) -> Result<Vec<(u32, BucketRaw)>> {
         let bpf = self.bpf.as_ref().context("BPF not loaded")?;
-        let map: BpfHashMap<_, u32, BucketRaw> =
-            BpfHashMap::try_from(bpf.map("cgroup_bucket").context("cgroup_bucket map not found")?)
-                .context("Failed to access cgroup_bucket map")?;
+        let map: BpfHashMap<_, u32, BucketRaw> = BpfHashMap::try_from(
+            bpf.map("cgroup_bucket")
+                .context("cgroup_bucket map not found")?,
+        )
+        .context("Failed to access cgroup_bucket map")?;
 
         let mut results = Vec::new();
-        for entry in map.iter() {
-            if let Ok((key, value)) = entry {
-                results.push((key, value));
-            }
+        for (key, value) in map.iter().flatten() {
+            results.push((key, value));
         }
         Ok(results)
     }

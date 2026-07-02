@@ -125,10 +125,10 @@ int enforce_limit(struct __sk_buff *skb) {
     // Look up or create bucket.
     struct bucket *bkt = bpf_map_lookup_elem(&cgroup_bucket, &cgroup_id);
     if (!bkt) {
-        // Initialize with full burst and current time.
+        // Initialize with full burst and current time (reuse `now` from above).
         struct bucket init = {};
         init.tokens = pol->burst_bytes;
-        init.last_refill_ns = bpf_ktime_get_ns();
+        init.last_refill_ns = now;
         bpf_map_update_elem(&cgroup_bucket, &cgroup_id, &init, BPF_ANY);
         bkt = bpf_map_lookup_elem(&cgroup_bucket, &cgroup_id);
         if (!bkt) {
@@ -137,8 +137,7 @@ int enforce_limit(struct __sk_buff *skb) {
         }
     }
 
-    // Refill tokens based on elapsed time.
-    __u64 now = bpf_ktime_get_ns();
+    // Refill tokens based on elapsed time (reuse `now` from watchdog check).
     __u64 elapsed;
     if (now > bkt->last_refill_ns) {
         elapsed = now - bkt->last_refill_ns;

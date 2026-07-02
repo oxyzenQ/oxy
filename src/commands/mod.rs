@@ -487,7 +487,10 @@ fn handle_ebpf_enforce(
         applied,
         if applied == 1 { "y" } else { "ies" }
     );
-    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {}s", watchdog);
+    eprintln!(
+        "[limiter] Safety: if zelynic crashes, BPF auto-disables in {}s",
+        watchdog
+    );
     eprintln!("[limiter] Press Ctrl+C to stop\n");
 
     // ━━ Enforcement loop ━━
@@ -516,9 +519,8 @@ fn handle_ebpf_enforce(
 
         // Log watchdog refresh to audit (at most once per 5s to avoid spam).
         if last_watchdog_log.elapsed() >= Duration::from_secs(5) {
-            if let Ok(Some(deadline)) = limiter.read_watchdog() {
-                // Approximate remaining (monotonic_ns is private to limiter module,
-                // so we just log that watchdog is alive).
+            if limiter.read_watchdog().is_ok() {
+                // Watchdog is alive — log heartbeat.
                 audit.log(&AuditEvent::WatchdogRefresh {
                     remaining_secs: watchdog,
                 });

@@ -111,11 +111,8 @@ impl Observer {
                 .context("Failed to access cgroup_counters map")?;
 
         let mut results = Vec::new();
-        for entry in map.iter() {
-            match entry {
-                Ok((key, value)) => results.push((key, value)),
-                Err(_) => continue,
-            }
+        for (key, value) in map.iter().flatten() {
+            results.push((key, value));
         }
         Ok(results)
     }
@@ -247,10 +244,7 @@ impl CounterSummary {
         sorted.sort_by_key(|c| std::cmp::Reverse(c.bytes));
 
         for c in sorted.iter().take(20) {
-            println!(
-                "  {}",
-                identity.label_verbose(c.cgroup_id)
-            );
+            println!("  {}", identity.label_verbose(c.cgroup_id));
             println!(
                 "    delta: {} pkt / {}   total: {}",
                 c.packets,
