@@ -1,7 +1,7 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! eBPF observer engine — real kernel-level traffic observation.
+//! eBPF observer + limiter engine — real kernel-level traffic observation and enforcement.
 
 #![cfg_attr(feature = "ebpf", allow(dead_code))]
 
@@ -9,6 +9,8 @@
 pub mod events;
 #[cfg(feature = "ebpf")]
 pub mod identity;
+#[cfg(feature = "ebpf")]
+pub mod limiter;
 #[cfg(feature = "ebpf")]
 pub mod loader;
 

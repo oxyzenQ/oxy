@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — Wolf Architecture Branch
+### Added — Wolf Architecture Branch (Limiter Layer 0)
+
+- **eBPF token-bucket enforcer (`bpf/limiter.bpf.c`)**: Pure-BPF per-cgroup
+  rate enforcement. Three BPF maps: `cgroup_policy` (userspace-written),
+  `cgroup_bucket` (BPF-managed token state), `cgroup_limiter_stats`
+  (enforcement diagnostics). On each egress packet: lookup policy → lookup or
+  init bucket → refill tokens based on elapsed time → deduct or drop. Elapsed
+  time capped at 1s to prevent overflow. Fail-safe: returns `1` (allow) on
+  every error path (no policy, bucket creation failure, map lookup failure).
+  No `tc`, no `nft`, no `systemd-wrapper` — pure kernel enforcement.
+- **Rust limiter loader (`src/ebpf/limiter.rs`)**: Loads `limiter.bpf.o`,
+  attaches to `cgroup_skb/egress`, resolves process names to cgroup IDs via
+  `IdentityMap`, writes policies to BPF map, reads enforcement stats. Includes
+  `parse_rate()` (B/s, KB/s, MB/s, GB/s), `parse_policy_spec()`
+  (`<target>:<rate>`), `default_burst()` (1s of traffic, clamped 4KB–100MB).
+- **`zelynic ebpf enforce --limit <target>:<rate>` CLI**: New subcommand.
+  Repeatable `--limit` flag for multiple policies. `--stats-interval N` for
+  periodic enforcement stats. `--duration N` for auto-exit. Targets can be
+  cgroup IDs (`73386:1MB/s`) or process names (`firefox:500KB/s` — resolves
+  all matching cgroups).
+- **`intergalaxion` branch deleted**: 44 commits of planning docs, 0 BPF
+  programs. Superseded by `wolf-architecture` branch which ships real code.
+- **`docs/WOLF_ARCHITECTURE.md` roadmap updated**: Limiter marked done,
+  added BPF map pinning (persistent policies) as next priority, added
+  deprecation of `tc`/`nft`/`systemd-wrapper` code paths as next step.
+
+### Added — Wolf Architecture Branch (Identity Layer 2)
 
 - **eBPF identity resolution (Layer 2)**: `IdentityMap` walks `/proc/*/cgroup`
   + `/sys/fs/cgroup{path}/cgroup.id` to build a reverse map: cgroup ID →
@@ -38,14 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does real reverse-lookup.
 - `CounterSummary::print()` signature changed: `print()` → `print(&IdentityMap)`.
   All callers updated.
+- `EbpfCommands` enum extended with `Enforce` variant. The `Ebpf` subcommand
+  doc updated to mention enforcement (was observer-only).
 
 ### Notes
 
 - This work lives on the `wolf-architecture` branch. **No tag, no release.**
   The `main` branch continues the v3.x legacy line (`tc`/`nft`/`systemd-wrapper`).
   The `wolf-architecture` branch is the staging ground for the pure-eBPF rewrite.
-- The `intergalaxion` branch (44 commits of planning docs, 0 BPF programs) is
-  superseded by this branch.
+- The `intergalaxion` branch has been **deleted** (was 44 commits of planning
+  docs, 0 BPF programs). Superseded by `wolf-architecture`.
+- **Policies are ephemeral** in this phase: they live in the BPF map for the
+  duration of the `enforce` command. When zelynic exits, the BPF program is
+  unloaded and all policies are lost. Future work: BPF map pinning for
+  persistent policies.
 
 ### Added
 

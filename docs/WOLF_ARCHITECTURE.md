@@ -131,22 +131,26 @@ This branch is the staging ground for the pure-eBPF rewrite. The legacy
 - [x] Layer 2: `IdentityMap` with /proc reverse-lookup + 10s TTL refresh
 - [x] Layer 3: `CounterSummary` with delta computation + sorting
 - [x] Layer 4: `print(&IdentityMap)` with human-readable labels
+- [x] Layer 0: `bpf/limiter.bpf.c` — cgroup_skb/egress token-bucket enforcer
+- [x] Layer 1: `apply_policies()` writes to `cgroup_policy` map
+- [x] Layer 1: `read_stats()` reads from `cgroup_limiter_stats` map
+- [x] Layer 4: `zelynic ebpf enforce --limit <target>:<rate>` CLI
+- [x] Fail-safe: BPF returns 1 (allow) on every error path
 
 ### Next
-- [ ] Layer 0: `bpf/limiter.bpf.c` — cgroup_skb/egress with token-bucket
-      enforcement (per-cgroup rate limit, BPF-side)
-- [ ] Layer 1: write path — `update_policy(cgroup_id, rate_bps)` writes to
-      `cgroup_policy` map
-- [ ] Layer 2: identity-aware policy — `zelynic limit --process firefox 1MB/s`
-      resolves firefox's cgroup, writes policy
+- [ ] Layer 1: BPF map pinning (`/sys/fs/bpf/zelynic_*`) for persistent
+      policies that survive zelynic exit
 - [ ] Layer 4: `--json` output for tooling integration
-- [ ] Layer 4: `--cgroup <id>` and `--min-bytes <N>` filters
+- [ ] Layer 4: `--cgroup <id>` and `--min-bytes <N>` filters for observer
+- [ ] Layer 0: ingress counter (cgroup_skb/ingress or XDP)
+- [ ] Deprecate `tc`/`nft`/`systemd-wrapper` code paths on this branch
 
 ### Future (post-v4.0)
 - [ ] Layer 0: `bpf/policer.bpf.c` — DSCP marking via `sock_ops`
 - [ ] Layer 0: XDP ingress counter (separate from cgroup_skb/egress)
 - [ ] Layer 2: cgroup path → systemd unit name resolution
 - [ ] Layer 4: TUI dashboard (ratatui, already a dependency)
+- [ ] Layer 0: per-process (not just per-cgroup) enforcement via `bpf_get_current_pid_tgid`
 
 ## Non-Goals
 

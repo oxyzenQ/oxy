@@ -178,7 +178,7 @@ pub(crate) fn dispatch(cli: Cli, iface_value: Option<&str>) -> Result<()> {
             None => backend::handle_backend_info(),
         },
 
-        // eBPF observer engine (experimental)
+        // eBPF observer + limiter engine (experimental)
         Some(Commands::Ebpf { command }) => match command {
             Some(EbpfCommands::Check) => {
                 crate::ebpf::print_observer_status();
@@ -194,6 +194,24 @@ pub(crate) fn dispatch(cli: Cli, iface_value: Option<&str>) -> Result<()> {
                     let _ = (duration, interval);
                     eprintln!(
                         "eBPF observer not compiled. Rebuild with: cargo build --features ebpf"
+                    );
+                    Err(anyhow::anyhow!("eBPF feature not enabled"))
+                }
+            }
+            Some(EbpfCommands::Enforce {
+                limits,
+                stats_interval,
+                duration,
+            }) => {
+                #[cfg(feature = "ebpf")]
+                {
+                    handle_ebpf_enforce(limits, stats_interval, duration)
+                }
+                #[cfg(not(feature = "ebpf"))]
+                {
+                    let _ = (limits, stats_interval, duration);
+                    eprintln!(
+                        "eBPF limiter not compiled. Rebuild with: cargo build --features ebpf"
                     );
                     Err(anyhow::anyhow!("eBPF feature not enabled"))
                 }
@@ -327,4 +345,107 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
     summary.print(observer.identity());
     observer.detach();
     Ok(())
+}
+
+/// eBPF limiter: load BPF program, apply policies, enforce rates, print stats.
+///
+/// Wolf Architecture flow:
+///   Layer 0 (kernel): BPF cgroup_skb/egress program enforces token-bucket
+///   Layer 1 (map):    policy writes → cgroup_policy, stats reads ← cgroup_limiter_stats
+///   Layer 2 (userspace): IdentityMap resolves process names to cgroup IDs
+///   Layer 4 (presentation): print_stats() with identity labels
+///
+/// Fail-safe: BPF program returns 1 (allow) on any error path.
+#[cfg(feature = "ebpf")]
+fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) -> Result<()> {
+    use crate::ebpf::limiter::{default_burst, parse_policy_spec, Limiter, PolicySpec};
+    use std::time::{Duration, Instant};
+
+    if limits.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No policies specified. Use --limit <target>:<rate>\n\
+             Example: zelynic ebpf enforce --limit firefox:1MB/s"
+        ));
+    }
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("eBPF limiter requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required for eBPF limiter"));
+    }
+
+    // Parse all policy specs upfront — fail fast on bad input.
+    let mut specs: Vec<PolicySpec> = Vec::new();
+    for (i, limit_str) in limits.iter().enumerate() {
+        let (target, rate_bps) = parse_policy_spec(limit_str)?;
+        let burst_bytes = default_burst(rate_bps);
+        eprintln!(
+            "[limiter] Parsed policy #{}: {} → {}/s (burst: {})",
+            i + 1,
+            target,
+            format_burst(rate_bps),
+            format_burst(burst_bytes)
+        );
+        specs.push(PolicySpec {
+            target,
+            rate_bps,
+            burst_bytes,
+        });
+    }
+
+    // Attach BPF limiter.
+    let mut limiter = Limiter::attach()?;
+
+    // Apply all policies.
+    let applied = limiter.apply_policies(&specs)?;
+    eprintln!(
+        "[limiter] {} polic{} applied. Enforcing.\n",
+        applied,
+        if applied == 1 { "y" } else { "ies" }
+    );
+
+    if applied == 0 {
+        eprintln!("[limiter] No policies could be applied. Exiting.");
+        limiter.detach();
+        return Ok(());
+    }
+
+    let start = Instant::now();
+    let stats_dur = if stats_interval > 0 {
+        Duration::from_secs(stats_interval)
+    } else {
+        Duration::from_secs(u64::MAX / 2) // effectively never
+    };
+    let mut last_print = Instant::now();
+
+    loop {
+        if last_print.elapsed() >= stats_dur {
+            limiter.print_stats();
+            last_print = Instant::now();
+        }
+
+        if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
+            eprintln!("\n[limiter] Duration reached, stopping...");
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Final stats.
+    limiter.print_stats();
+    limiter.detach();
+    Ok(())
+}
+
+#[cfg(feature = "ebpf")]
+fn format_burst(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }

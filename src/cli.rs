@@ -621,7 +621,7 @@ pub enum BackendCommands {
     Doctor(BackendDoctorArgs),
 }
 
-/// eBPF observer subcommands.
+/// eBPF observer + limiter subcommands.
 #[derive(Debug, Subcommand)]
 pub enum EbpfCommands {
     /// Check if the system supports eBPF observer
@@ -636,6 +636,30 @@ pub enum EbpfCommands {
         /// Print summary every N seconds
         #[arg(long, default_value = "5")]
         interval: u64,
+    },
+
+    /// Enforce per-cgroup rate limits via eBPF token bucket (requires root + --features ebpf)
+    ///
+    /// Pure eBPF enforcement — no tc, no nft, no cgroup-wrapper.
+    /// Policies are ephemeral: they persist only while this command runs.
+    ///
+    /// Examples:
+    ///   zelynic ebpf enforce --limit 73386:1MB/s
+    ///   zelynic ebpf enforce --limit firefox:500KB/s --limit unbound:100KB/s
+    ///   zelynic ebpf enforce --limit firefox:1MB/s --stats-interval 5
+    Enforce {
+        /// Rate limit policy: <cgroup_id|process_name>:<rate>
+        /// Repeatable. e.g., --limit firefox:1MB/s --limit 73386:500KB/s
+        #[arg(long = "limit", value_name = "TARGET:RATE")]
+        limits: Vec<String>,
+
+        /// Print enforcement stats every N seconds (0 = only on exit)
+        #[arg(long, default_value = "5")]
+        stats_interval: u64,
+
+        /// Duration in seconds (0 = until Ctrl+C)
+        #[arg(long, default_value = "0")]
+        duration: u64,
     },
 }
 
