@@ -144,22 +144,15 @@ impl Limiter {
 
     /// Apply a list of policies. Resolves process names to cgroup IDs via
     /// the identity map, then writes to the cgroup_policy BPF map.
+    ///
+    /// Two-phase to avoid borrow conflict:
+    ///   Phase 1: resolve all targets (needs &mut self for identity refresh)
+    ///   Phase 2: write to BPF map (needs &mut self.bpf via map_mut)
     pub fn apply_policies(&mut self, specs: &[PolicySpec]) -> Result<usize> {
-        let bpf = self
-            .bpf
-            .as_ref()
-            .context("BPF not loaded — call attach() first")?;
-
-        let mut policy_map: BpfHashMap<_, u32, PolicyRaw> =
-            BpfHashMap::try_from(bpf.map("cgroup_policy").context("cgroup_policy map not found")?)
-                .context("Failed to access cgroup_policy map")?;
-
-        let mut applied = 0usize;
-
+        // Phase 1: resolve all targets.
+        let mut resolved: Vec<(u32, PolicyRaw, String)> = Vec::new();
         for spec in specs {
-            // Resolve target to cgroup_id(s).
             let cgroup_ids = self.resolve_target(&spec.target)?;
-
             if cgroup_ids.is_empty() {
                 eprintln!(
                     "[limiter] WARNING: no cgroup found for '{}' — skipping",
@@ -167,29 +160,68 @@ impl Limiter {
                 );
                 continue;
             }
-
             for cgroup_id in cgroup_ids {
                 let label = self.identity.label(cgroup_id);
                 let raw = PolicyRaw {
                     rate_bps: spec.rate_bps,
                     burst_bytes: spec.burst_bytes,
                 };
-
-                // BPF_ANY = 0 (create or update)
-                policy_map
-                    .insert(cgroup_id, raw, 0)
-                    .map_err(|e| anyhow!("Failed to write policy for {label}: {e}"))?;
-
-                eprintln!(
-                    "[limiter] Policy set: {label} → rate={} burst={}",
-                    format_rate(spec.rate_bps),
-                    format_bytes(spec.burst_bytes),
-                );
-                applied += 1;
+                resolved.push((cgroup_id, raw, label));
             }
         }
 
+        // Phase 2: write to BPF map.
+        let bpf = self
+            .bpf
+            .as_mut()
+            .context("BPF not loaded — call attach() first")?;
+
+        let mut policy_map: BpfHashMap<_, u32, PolicyRaw> =
+            BpfHashMap::try_from(bpf.map_mut("cgroup_policy").context("cgroup_policy map not found")?)
+                .context("Failed to access cgroup_policy map")?;
+
+        let mut applied = 0usize;
+        for (cgroup_id, raw, label) in resolved {
+            // BPF_ANY = 0 (create or update)
+            policy_map
+                .insert(cgroup_id, raw, 0)
+                .map_err(|e| anyhow!("Failed to write policy for {label}: {e}"))?;
+
+            eprintln!(
+                "[limiter] Policy set: {label} → rate={} burst={}",
+                format_rate(raw.rate_bps),
+                format_bytes(raw.burst_bytes),
+            );
+            applied += 1;
+        }
+
         Ok(applied)
+    }
+
+    /// Refresh the watchdog deadline. If userspace stops refreshing,
+    /// the BPF program auto-disables (becomes no-op) after the timeout.
+    ///
+    /// CRITICAL: This is zelynic's safety net. If zelynic crashes, freezes,
+    /// or is kill -9'd, the watchdog expires and all traffic resumes
+    /// automatically — no manual `bpftool prog unload` needed.
+    ///
+    /// Uses CLOCK_MONOTONIC to match bpf_ktime_get_ns().
+    pub fn refresh_watchdog(&mut self, timeout_secs: u64) -> Result<()> {
+        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
+        let mut watchdog: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
+            bpf.map_mut("watchdog_deadline")
+                .context("watchdog_deadline map not found")?,
+        )
+        .context("Failed to access watchdog_deadline map")?;
+
+        let now = monotonic_ns();
+        let deadline = now.saturating_add(timeout_secs.saturating_mul(1_000_000_000));
+
+        // Key 0 (ARRAY map, single entry).
+        watchdog
+            .insert(0, deadline, 0)
+            .map_err(|e| anyhow!("Failed to refresh watchdog: {e}"))?;
+        Ok(())
     }
 
     /// Resolve a target string to cgroup ID(s).
@@ -286,6 +318,42 @@ impl Limiter {
                 s.packets_dropped,
                 format_bytes(s.bytes_dropped),
             );
+        }
+    }
+
+    /// Read current watchdog deadline (monotonic ns). Returns None if not set.
+    pub fn read_watchdog(&self) -> Result<Option<u64>> {
+        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
+        let map: BpfHashMap<_, u32, u64> = BpfHashMap::try_from(
+            bpf.map("watchdog_deadline")
+                .context("watchdog_deadline map not found")?,
+        )
+        .context("Failed to access watchdog_deadline map")?;
+
+        match map.get(&0, 0) {
+            Ok(deadline) => Ok(Some(deadline)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Print watchdog status alongside stats.
+    pub fn print_watchdog_status(&self) {
+        match self.read_watchdog() {
+            Ok(Some(deadline)) => {
+                let now = monotonic_ns();
+                if deadline > now {
+                    let remaining_secs = (deadline - now) / 1_000_000_000;
+                    eprintln!("[limiter] Watchdog: {remaining_secs}s remaining");
+                } else {
+                    eprintln!("[limiter] Watchdog: EXPIRED (BPF is no-op)");
+                }
+            }
+            Ok(None) => {
+                eprintln!("[limiter] Watchdog: not set (BPF is no-op)");
+            }
+            Err(e) => {
+                eprintln!("[limiter] Watchdog: read error: {e}");
+            }
         }
     }
 
@@ -406,6 +474,29 @@ fn format_bytes(bytes: u64) -> String {
 
 fn format_rate(bps: u64) -> String {
     format!("{}/s", format_bytes(bps))
+}
+
+/// Get monotonic time in nanoseconds. Matches `bpf_ktime_get_ns()` which
+/// uses CLOCK_MONOTONIC (time since boot, excluding suspend).
+///
+/// Used for watchdog deadline calculations — userspace and BPF must use
+/// the same clock for the deadline comparison to work.
+fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime with a valid clock ID and valid pointer is safe.
+    // CLOCK_MONOTONIC is guaranteed to exist on Linux.
+    unsafe {
+        if libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) != 0 {
+            // Should never happen on Linux. Return 0 as fallback —
+            // this will cause the watchdog to immediately "expire" in BPF,
+            // which is the safe direction (allow all traffic).
+            return 0;
+        }
+    }
+    (ts.tv_sec as u64).saturating_mul(1_000_000_000) + (ts.tv_nsec as u64)
 }
 
 #[cfg(test)]

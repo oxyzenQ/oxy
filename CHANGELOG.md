@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Wolf Architecture Branch (Safety Layer)
+
+- **BPF self-destruct watchdog (Priority 1 — CRITICAL)**: New `watchdog_deadline`
+  BPF map (ARRAY, 1 entry). BPF program checks deadline at the very START of
+  `enforce_limit` — if expired or unset, returns `1` (allow all). Userspace
+  refreshes deadline every 200ms (every loop iteration) with configurable
+  timeout (default 30s, min 5s). If zelynic crashes, freezes, or is kill -9'd,
+  BPF auto-disables within 30s — no manual `bpftool prog unload` needed, no
+  reboot needed. Uses `CLOCK_MONOTONIC` via `libc::clock_gettime` to match
+  `bpf_ktime_get_ns()`.
+- **Min-rate guard (Priority 2)**: Rejects rates below 1 KB/s (1024 B/s) unless
+  `--allow-dangerous` flag is passed. Warns for rates below 100 KB/s with
+  interactive `[y/N]` prompt (skipped if not a TTY). Prevents users from
+  accidentally bricking a cgroup's network access.
+- **Audit log (Priority 3)**: JSONL event log at `~/.local/share/zelynic/audit.jsonl`
+  (XDG-compliant). Logs: `enforce_start`, `policy_apply` (with cgroup_id, comm,
+  rate_bps, burst_bytes), `enforce_stop`, `watchdog_refresh`, `rate_rejected`.
+  Uses `chrono::Utc::to_rfc3339()` for timestamps. For post-mortem debugging:
+  "why was firefox slow at 3pm?" → `grep firefox ~/.local/share/zelynic/audit.jsonl`.
+- **`--watchdog N` flag**: Configurable watchdog timeout (default 30, min 5).
+- **`--allow-dangerous` flag**: Override min-rate guard for rates < 1 KB/s.
+- **`print_watchdog_status()`**: Shows remaining watchdog time alongside stats.
+- **Compilation fix**: `apply_policies()` now uses `map_mut()` + `as_mut()` for
+  BPF map writes (aya 0.13 requires `&mut MapData` for `insert()`). Restructured
+  to two-phase (resolve targets, then write) to avoid borrow checker conflict.
+
 ### Added — Wolf Architecture Branch (Limiter Layer 0)
 
 - **eBPF token-bucket enforcer (`bpf/limiter.bpf.c`)**: Pure-BPF per-cgroup

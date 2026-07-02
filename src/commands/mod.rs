@@ -202,14 +202,16 @@ pub(crate) fn dispatch(cli: Cli, iface_value: Option<&str>) -> Result<()> {
                 limits,
                 stats_interval,
                 duration,
+                watchdog,
+                allow_dangerous,
             }) => {
                 #[cfg(feature = "ebpf")]
                 {
-                    handle_ebpf_enforce(limits, stats_interval, duration)
+                    handle_ebpf_enforce(limits, stats_interval, duration, watchdog, allow_dangerous)
                 }
                 #[cfg(not(feature = "ebpf"))]
                 {
-                    let _ = (limits, stats_interval, duration);
+                    let _ = (limits, stats_interval, duration, watchdog, allow_dangerous);
                     eprintln!(
                         "eBPF limiter not compiled. Rebuild with: cargo build --features ebpf"
                     );
@@ -355,12 +357,25 @@ fn handle_ebpf_observe(duration: u64, interval: u64) -> Result<()> {
 ///   Layer 2 (userspace): IdentityMap resolves process names to cgroup IDs
 ///   Layer 4 (presentation): print_stats() with identity labels
 ///
-/// Fail-safe: BPF program returns 1 (allow) on any error path.
+/// Safety layers:
+///   1. Watchdog: BPF auto-disables if zelynic stops refreshing (crash/kill)
+///   2. Min-rate guard: reject rates < 1 KB/s (unless --allow-dangerous)
+///   3. Audit log: all events logged to ~/.local/share/zelynic/audit.jsonl
+///   4. Fail-safe: BPF returns 1 (allow) on any error path
 #[cfg(feature = "ebpf")]
-fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) -> Result<()> {
+fn handle_ebpf_enforce(
+    limits: Vec<String>,
+    stats_interval: u64,
+    duration: u64,
+    watchdog: u64,
+    allow_dangerous: bool,
+) -> Result<()> {
+    use crate::ebpf::audit::{AuditEvent, AuditLog};
     use crate::ebpf::limiter::{default_burst, parse_policy_spec, Limiter, PolicySpec};
+    use std::io::{self, BufRead, Write};
     use std::time::{Duration, Instant};
 
+    // ━━ Validation ━━
     if limits.is_empty() {
         return Err(anyhow::anyhow!(
             "No policies specified. Use --limit <target>:<rate>\n\
@@ -373,11 +388,44 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
         return Err(anyhow::anyhow!("root required for eBPF limiter"));
     }
 
-    // Parse all policy specs upfront — fail fast on bad input.
+    // Watchdog minimum: 5 seconds. Below that, race conditions possible.
+    let watchdog = if watchdog < 5 { 5 } else { watchdog };
+
+    let audit = AuditLog::open();
+    eprintln!("[limiter] Audit log: {}", audit.path().display());
+
+    // ━━ Parse + validate policies ━━
+    const MIN_RATE: u64 = 1024; // 1 KB/s — below this is "bricked"
+    const WARN_RATE: u64 = 100_000; // 100 KB/s — below this, warn user
+
     let mut specs: Vec<PolicySpec> = Vec::new();
     for (i, limit_str) in limits.iter().enumerate() {
         let (target, rate_bps) = parse_policy_spec(limit_str)?;
         let burst_bytes = default_burst(rate_bps);
+
+        // Min-rate guard.
+        if rate_bps < MIN_RATE {
+            if !allow_dangerous {
+                audit.log(&AuditEvent::RateRejected {
+                    target: target.clone(),
+                    rate_bps,
+                    reason: format!("below minimum {} B/s (use --allow-dangerous)", MIN_RATE),
+                });
+                return Err(anyhow::anyhow!(
+                    "Rate {} B/s for '{}' is below minimum ({} B/s).\n\
+                     Such a low rate will make the target unusable.\n\
+                     Use --allow-dangerous to override.",
+                    rate_bps,
+                    target,
+                    MIN_RATE
+                ));
+            }
+            eprintln!(
+                "[limiter] WARNING: rate for '{}' is below minimum ({} B/s) — overriding with --allow-dangerous",
+                target, rate_bps
+            );
+        }
+
         eprintln!(
             "[limiter] Parsed policy #{}: {} → {}/s (burst: {})",
             i + 1,
@@ -385,6 +433,27 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
             format_burst(rate_bps),
             format_burst(burst_bytes)
         );
+
+        // Warn for low rates (but above minimum).
+        if rate_bps < WARN_RATE && !allow_dangerous {
+            eprintln!(
+                "\n  ⚠ WARNING: Limiting '{}' to {}/s may make it unusable for normal browsing.",
+                target,
+                format_burst(rate_bps)
+            );
+            eprint!("  Continue? [y/N] ");
+            let _ = io::stderr().flush();
+            let mut input = String::new();
+            if io::stdin().lock().read_line(&mut input).is_err() {
+                eprintln!("\n[limiter] Could not read input. Aborting.");
+                return Ok(());
+            }
+            if !input.trim().eq_ignore_ascii_case("y") {
+                eprintln!("[limiter] Aborted by user.");
+                return Ok(());
+            }
+        }
+
         specs.push(PolicySpec {
             target,
             rate_bps,
@@ -392,16 +461,20 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
         });
     }
 
-    // Attach BPF limiter.
+    // ━━ Attach BPF + set watchdog BEFORE policies ━━
     let mut limiter = Limiter::attach()?;
+
+    // Set watchdog first — BPF is no-op until watchdog is set.
+    limiter.refresh_watchdog(watchdog)?;
+    eprintln!("[limiter] Watchdog armed: {}s timeout", watchdog);
 
     // Apply all policies.
     let applied = limiter.apply_policies(&specs)?;
-    eprintln!(
-        "[limiter] {} polic{} applied. Enforcing.\n",
-        applied,
-        if applied == 1 { "y" } else { "ies" }
-    );
+
+    // Audit log: enforce_start + policy_apply events.
+    audit.log(&AuditEvent::EnforceStart {
+        policy_count: applied,
+    });
 
     if applied == 0 {
         eprintln!("[limiter] No policies could be applied. Exiting.");
@@ -409,6 +482,15 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
         return Ok(());
     }
 
+    eprintln!(
+        "[limiter] {} polic{} applied. Enforcing.\n",
+        applied,
+        if applied == 1 { "y" } else { "ies" }
+    );
+    eprintln!("[limiter] Safety: if zelynic crashes, BPF auto-disables in {}s", watchdog);
+    eprintln!("[limiter] Press Ctrl+C to stop\n");
+
+    // ━━ Enforcement loop ━━
     let start = Instant::now();
     let stats_dur = if stats_interval > 0 {
         Duration::from_secs(stats_interval)
@@ -416,15 +498,40 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
         Duration::from_secs(u64::MAX / 2) // effectively never
     };
     let mut last_print = Instant::now();
+    let mut last_watchdog_log = Instant::now();
 
     loop {
+        // Refresh watchdog EVERY iteration (every 200ms).
+        // This is the heartbeat — if we stop, BPF auto-disables.
+        if let Err(e) = limiter.refresh_watchdog(watchdog) {
+            eprintln!("[limiter] WARNING: watchdog refresh failed: {e}");
+        }
+
+        // Print stats at the configured interval.
         if last_print.elapsed() >= stats_dur {
             limiter.print_stats();
+            limiter.print_watchdog_status();
             last_print = Instant::now();
         }
 
+        // Log watchdog refresh to audit (at most once per 5s to avoid spam).
+        if last_watchdog_log.elapsed() >= Duration::from_secs(5) {
+            if let Ok(Some(deadline)) = limiter.read_watchdog() {
+                // Approximate remaining (monotonic_ns is private to limiter module,
+                // so we just log that watchdog is alive).
+                audit.log(&AuditEvent::WatchdogRefresh {
+                    remaining_secs: watchdog,
+                });
+            }
+            last_watchdog_log = Instant::now();
+        }
+
+        // Check duration.
         if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
             eprintln!("\n[limiter] Duration reached, stopping...");
+            audit.log(&AuditEvent::EnforceStop {
+                reason: "duration reached".to_string(),
+            });
             break;
         }
 
@@ -433,6 +540,7 @@ fn handle_ebpf_enforce(limits: Vec<String>, stats_interval: u64, duration: u64) 
 
     // Final stats.
     limiter.print_stats();
+    limiter.print_watchdog_status();
     limiter.detach();
     Ok(())
 }

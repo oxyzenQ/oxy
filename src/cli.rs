@@ -643,10 +643,13 @@ pub enum EbpfCommands {
     /// Pure eBPF enforcement — no tc, no nft, no cgroup-wrapper.
     /// Policies are ephemeral: they persist only while this command runs.
     ///
+    /// Safety: BPF self-destruct watchdog auto-disables enforcement if
+    /// zelynic crashes (default 30s timeout). Use --watchdog to adjust.
+    ///
     /// Examples:
     ///   zelynic ebpf enforce --limit 73386:1MB/s
     ///   zelynic ebpf enforce --limit firefox:500KB/s --limit unbound:100KB/s
-    ///   zelynic ebpf enforce --limit firefox:1MB/s --stats-interval 5
+    ///   zelynic ebpf enforce --limit firefox:1MB/s --stats-interval 5 --watchdog 60
     Enforce {
         /// Rate limit policy: <cgroup_id|process_name>:<rate>
         /// Repeatable. e.g., --limit firefox:1MB/s --limit 73386:500KB/s
@@ -660,6 +663,16 @@ pub enum EbpfCommands {
         /// Duration in seconds (0 = until Ctrl+C)
         #[arg(long, default_value = "0")]
         duration: u64,
+
+        /// Watchdog timeout in seconds. If zelynic crashes, BPF auto-disables
+        /// after this many seconds. Default: 30. Minimum: 5.
+        #[arg(long, default_value = "30")]
+        watchdog: u64,
+
+        /// Allow rates below minimum (1 KB/s). Dangerous — may brick the
+        /// target cgroup's network access. Use with caution.
+        #[arg(long)]
+        allow_dangerous: bool,
     },
 }
 

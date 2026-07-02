@@ -73,11 +73,40 @@ struct {
     __type(value, struct limiter_stats);
 } cgroup_limiter_stats SEC(".maps");
 
+/// Watchdog deadline — monotonic time (bpf_ktime_get_ns) after which the
+/// BPF program becomes a no-op (returns 1 = allow all).
+///
+/// Userspace refreshes this every 200ms with a 30s timeout. If zelynic
+/// crashes, freezes, or is kill -9'd, the watchdog expires within 30s
+/// and all traffic resumes automatically — no manual intervention needed.
+///
+/// Fail-safe: if the map entry doesn't exist (before first refresh),
+/// the program also allows all traffic.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);   // always 0
+    __type(value, __u64); // deadline in nanoseconds (CLOCK_MONOTONIC)
+} watchdog_deadline SEC(".maps");
+
 /// 1 second in nanoseconds. Used to cap elapsed time and avoid overflow.
 #define NS_PER_SEC 1000000000ULL
 
 SEC("cgroup_skb/egress")
 int enforce_limit(struct __sk_buff *skb) {
+    // ━━ Watchdog check (fail-safe layer) ━━
+    // If userspace is dead or hasn't set a deadline yet, allow all traffic.
+    // This is the FIRST thing we check — before any policy lookup.
+    __u32 zero = 0;
+    __u64 *deadline = bpf_map_lookup_elem(&watchdog_deadline, &zero);
+    if (!deadline) {
+        return 1; // No watchdog set — fail safe.
+    }
+    __u64 now = bpf_ktime_get_ns();
+    if (now > *deadline) {
+        return 1; // Watchdog expired — userspace is dead. Allow all.
+    }
+
     __u64 cgid = bpf_get_current_cgroup_id();
     __u32 cgroup_id = (__u32)cgid;
     __u32 pkt_len = skb->len;
