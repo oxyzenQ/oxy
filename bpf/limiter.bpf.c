@@ -107,7 +107,7 @@ int enforce_limit(struct __sk_buff *skb) {
         return 1; // Watchdog expired — userspace is dead. Allow all.
     }
 
-    __u64 cgid = bpf_get_current_cgroup_id();
+    __u64 cgid = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
     __u32 pkt_len = skb->len;
 

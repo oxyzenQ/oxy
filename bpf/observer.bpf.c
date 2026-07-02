@@ -52,7 +52,7 @@ struct {
 
 SEC("cgroup_skb/egress")
 int observe_egress(struct __sk_buff *skb) {
-    __u64 cgid = bpf_get_current_cgroup_id();
+    __u64 cgid = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;

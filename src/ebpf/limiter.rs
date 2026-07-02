@@ -119,15 +119,26 @@ impl Limiter {
         let cgroup_file =
             File::open(cgroup_path).context("Failed to open cgroup root directory")?;
 
-        let _link_id = program
+        // Attach to BOTH egress (upload) and ingress (download).
+        // Egress catches ACKs + requests. Ingress catches download data.
+        // Both are needed for effective rate limiting.
+        let _egress_link = program
             .attach(
-                cgroup_file,
+                cgroup_file.try_clone()?,
                 CgroupSkbAttachType::Egress,
                 CgroupAttachMode::default(),
             )
-            .context("Failed to attach BPF program to cgroup")?;
+            .context("Failed to attach BPF program to cgroup (egress)")?;
 
-        eprintln!("[limiter] Enforcer attached to {cgroup_path}");
+        let _ingress_link = program
+            .attach(
+                cgroup_file,
+                CgroupSkbAttachType::Ingress,
+                CgroupAttachMode::default(),
+            )
+            .context("Failed to attach BPF program to cgroup (ingress)")?;
+
+        eprintln!("[limiter] Enforcer attached to {cgroup_path} (ingress + egress)");
 
         let mut limiter = Limiter {
             bpf: Some(bpf),
