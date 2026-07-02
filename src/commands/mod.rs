@@ -270,15 +270,12 @@ fn handle_serve(cli: &Cli) -> Result<()> {
             allow_dangerous,
             ..
         }) => {
-            let rates = if let Some(r) = rate {
-                let r_bps = parse_rate_checked(r, *allow_dangerous)?;
-                crate::ebpf::limiter::RateSpec {
-                    download: Some(r_bps),
-                    upload: Some(r_bps),
-                }
-            } else {
-                parse_rates(download.as_deref(), upload.as_deref(), *allow_dangerous)?
-            };
+            let rates = resolve_rates(
+                rate.as_deref(),
+                download.as_deref(),
+                upload.as_deref(),
+                *allow_dangerous,
+            )?;
 
             let target_obj = Target::parse(target);
             let watchdog = if *watchdog < 5 { 5 } else { *watchdog };
@@ -318,15 +315,12 @@ fn handle_serve(cli: &Cli) -> Result<()> {
             allow_dangerous,
             ..
         }) => {
-            let rates = if let Some(r) = rate {
-                let r_bps = parse_rate_checked(r, *allow_dangerous)?;
-                crate::ebpf::limiter::RateSpec {
-                    download: Some(r_bps),
-                    upload: Some(r_bps),
-                }
-            } else {
-                parse_rates(download.as_deref(), upload.as_deref(), *allow_dangerous)?
-            };
+            let rates = resolve_rates(
+                rate.as_deref(),
+                download.as_deref(),
+                upload.as_deref(),
+                *allow_dangerous,
+            )?;
 
             let target_list: Vec<Target> = targets
                 .split(':')
@@ -419,15 +413,7 @@ fn handle_strict_single(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let rates = if let Some(r) = rate {
-        let r_bps = parse_rate_checked(r, allow_dangerous)?;
-        crate::ebpf::limiter::RateSpec {
-            download: Some(r_bps),
-            upload: Some(r_bps),
-        }
-    } else {
-        parse_rates(download, upload, allow_dangerous)?
-    };
+    let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
 
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
@@ -475,15 +461,7 @@ fn handle_strict_multi(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let rates = if let Some(r) = rate {
-        let r_bps = parse_rate_checked(r, allow_dangerous)?;
-        crate::ebpf::limiter::RateSpec {
-            download: Some(r_bps),
-            upload: Some(r_bps),
-        }
-    } else {
-        parse_rates(download, upload, allow_dangerous)?
-    };
+    let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
 
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
@@ -614,6 +592,37 @@ fn parse_rate_checked(s: &str, allow_dangerous: bool) -> Result<u64> {
         eprintln!("[limiter] WARNING: rate below minimum — overriding with --allow-dangerous");
     }
     Ok(rate)
+}
+
+/// Resolve rates from CLI args. Priority: -d/-u flags > positional rate.
+///
+/// If -d or -u is specified, use those (per-direction).
+/// If neither -d nor -u, but positional rate exists, use it for BOTH directions.
+/// If nothing specified, return empty RateSpec (caller should error).
+#[cfg(feature = "ebpf")]
+fn resolve_rates(
+    rate: Option<&str>,
+    download: Option<&str>,
+    upload: Option<&str>,
+    allow_dangerous: bool,
+) -> Result<crate::ebpf::limiter::RateSpec> {
+    if download.is_some() || upload.is_some() {
+        // -d or -u specified → use per-direction.
+        parse_rates(download, upload, allow_dangerous)
+    } else if let Some(r) = rate {
+        // No -d/-u, but positional rate → both = rate.
+        let r_bps = parse_rate_checked(r, allow_dangerous)?;
+        Ok(crate::ebpf::limiter::RateSpec {
+            download: Some(r_bps),
+            upload: Some(r_bps),
+        })
+    } else {
+        // Nothing specified.
+        Ok(crate::ebpf::limiter::RateSpec {
+            download: None,
+            upload: None,
+        })
+    }
 }
 
 #[cfg(feature = "ebpf")]
