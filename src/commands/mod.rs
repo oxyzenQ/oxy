@@ -6,13 +6,30 @@
 pub(crate) mod backend;
 pub(crate) mod help;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
 
+/// Pin directory for BPF maps (shared between parent and child).
+#[cfg(feature = "ebpf")]
+const PIN_DIR: &str = "/sys/fs/bpf/zelynic";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
+#[cfg(feature = "ebpf")]
+const PID_FILE: &str = "/tmp/zelynic.pid";
+
 /// Top-level CLI dispatch.
 pub(crate) fn dispatch(cli: Cli) -> Result<()> {
+    // Serve mode: this is the background child process.
+    // It loads BPF, pins maps, and keeps BPF alive until killed.
+    #[cfg(feature = "ebpf")]
+    if cli.serve {
+        return handle_serve(&cli);
+    }
+
     match cli.command {
         Some(Commands::StrictSingle {
             target,
@@ -174,6 +191,207 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 
 // ━━ Command handlers (ebpf feature) ━━
 
+/// Check if serve child is running.
+#[cfg(feature = "ebpf")]
+fn child_alive() -> bool {
+    if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            // kill -0 checks if process exists without sending signal.
+            return nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+        }
+    }
+    false
+}
+
+/// Spawn the serve child process. It loads BPF, pins maps, and keeps BPF alive.
+#[cfg(feature = "ebpf")]
+fn spawn_serve_child(verbose: bool) -> Result<()> {
+    use std::process::Command;
+
+    let exe = std::env::current_exe().context("Failed to get current exe")?;
+    let mut cmd = Command::new(&exe);
+    cmd.arg("--serve");
+
+    // Pass through the same command + args.
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| a != "--serve")
+        .collect();
+    for arg in &args {
+        cmd.arg(arg);
+    }
+
+    // Redirect child stdout/stderr to /dev/null (it's a background process).
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+
+    let child = cmd.spawn().context("Failed to spawn serve child")?;
+    let pid = child.id();
+
+    // Write PID file.
+    std::fs::write(PID_FILE, pid.to_string()).context("Failed to write PID file")?;
+
+    if verbose {
+        eprintln!("[limiter] Serve child spawned (PID {pid})");
+    }
+
+    // Wait for maps to be pinned (child needs time to load BPF + pin).
+    for _ in 0..50 {
+        // 50 × 100ms = 5s timeout
+        if std::path::Path::new(PIN_MAP_POLICY_DL).exists() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    bail!("Serve child failed to pin maps within 5 seconds. Check 'zelynic -v strict-single ...' for errors.")
+}
+
+/// Serve mode handler — runs as background child process.
+/// Loads BPF, pins maps, applies initial policies, refreshes watchdog until killed.
+#[cfg(feature = "ebpf")]
+fn handle_serve(cli: &Cli) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, Target};
+    use std::time::{Duration, Instant};
+
+    // Parse the strict command from cli.
+    match &cli.command {
+        Some(Commands::StrictSingle {
+            target,
+            rate,
+            download,
+            upload,
+            watchdog,
+            allow_dangerous,
+            ..
+        }) => {
+            let rates = if let Some(r) = rate {
+                let r_bps = parse_rate_checked(r, *allow_dangerous)?;
+                crate::ebpf::limiter::RateSpec {
+                    download: Some(r_bps),
+                    upload: Some(r_bps),
+                }
+            } else {
+                parse_rates(download.as_deref(), upload.as_deref(), *allow_dangerous)?
+            };
+
+            let target_obj = Target::parse(target);
+            let watchdog = if *watchdog < 5 { 5 } else { *watchdog };
+
+            // Load BPF, attach, pin maps.
+            std::fs::create_dir_all(PIN_DIR)?;
+            let mut limiter = Limiter::attach(cli.verbose)?;
+            limiter.refresh_watchdog(watchdog)?;
+
+            // Pin maps so parent can access them.
+            pin_maps(&limiter)?;
+
+            // Apply initial policies.
+            limiter.apply_single(&target_obj, &rates)?;
+
+            // Loop: refresh watchdog until killed.
+            let _start = Instant::now();
+            loop {
+                if let Err(e) = limiter.refresh_watchdog(watchdog) {
+                    eprintln!("[serve] watchdog refresh failed: {e}");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+
+                // Check if we should exit (duration-based, for testing).
+                // Default duration=5 means run for 5 seconds then exit.
+                // duration=0 means run forever.
+                // Actually in serve mode, we run forever until SIGTERM.
+                // But we keep duration for backwards compat with --duration 0.
+            }
+        }
+        Some(Commands::StrictMulti {
+            targets,
+            rate,
+            download,
+            upload,
+            watchdog,
+            allow_dangerous,
+            ..
+        }) => {
+            let rates = if let Some(r) = rate {
+                let r_bps = parse_rate_checked(r, *allow_dangerous)?;
+                crate::ebpf::limiter::RateSpec {
+                    download: Some(r_bps),
+                    upload: Some(r_bps),
+                }
+            } else {
+                parse_rates(download.as_deref(), upload.as_deref(), *allow_dangerous)?
+            };
+
+            let target_list: Vec<Target> = targets
+                .split(':')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(Target::parse)
+                .collect();
+
+            let watchdog = if *watchdog < 5 { 5 } else { *watchdog };
+
+            std::fs::create_dir_all(PIN_DIR)?;
+            let mut limiter = Limiter::attach(cli.verbose)?;
+            limiter.refresh_watchdog(watchdog)?;
+            pin_maps(&limiter)?;
+            limiter.apply_group(&target_list, &rates)?;
+
+            loop {
+                if let Err(e) = limiter.refresh_watchdog(watchdog) {
+                    eprintln!("[serve] watchdog refresh failed: {e}");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+        _ => {
+            bail!("--serve mode only works with strict-single or strict-multi");
+        }
+    }
+}
+
+/// Pin BPF maps to /sys/fs/bpf/zelynic/ for parent access.
+#[cfg(feature = "ebpf")]
+fn pin_maps(limiter: &crate::ebpf::limiter::Limiter) -> Result<()> {
+    limiter.pin_map("cgroup_policy_dl", PIN_MAP_POLICY_DL)?;
+    limiter.pin_map("cgroup_policy_ul", PIN_MAP_POLICY_UL)?;
+    Ok(())
+}
+
+/// Kill serve child and cleanup.
+#[cfg(feature = "ebpf")]
+fn kill_serve_child() -> Result<()> {
+    if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                Some(nix::sys::signal::Signal::SIGTERM),
+            );
+            // Wait for child to exit (max 3 seconds).
+            for _ in 0..30 {
+                if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
+                    break; // process gone
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // Force kill if still alive.
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                Some(nix::sys::signal::Signal::SIGKILL),
+            );
+        }
+    }
+
+    // Remove PID file + pin files.
+    let _ = std::fs::remove_file(PID_FILE);
+    let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
+    let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);
+    let _ = std::fs::remove_dir(PIN_DIR);
+    Ok(())
+}
+
 #[cfg(feature = "ebpf")]
 #[allow(clippy::too_many_arguments)]
 fn handle_strict_single(
@@ -181,9 +399,9 @@ fn handle_strict_single(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
-    watchdog: u64,
+    _watchdog: u64,
     allow_dangerous: bool,
-    duration: u64,
+    _duration: u64,
     verbose: bool,
 ) -> Result<()> {
     use crate::ebpf::limiter::{Limiter, Target};
@@ -193,7 +411,6 @@ fn handle_strict_single(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    // Parse rates: positional rate = both dl+ul, -d/-u for per-direction.
     let rates = if let Some(r) = rate {
         let r_bps = parse_rate_checked(r, allow_dangerous)?;
         crate::ebpf::limiter::RateSpec {
@@ -212,21 +429,22 @@ fn handle_strict_single(
     }
 
     let target = Target::parse(target_str);
-    let watchdog = if watchdog < 5 { 5 } else { watchdog };
 
-    let mut limiter = Limiter::attach(verbose)?;
-    limiter.refresh_watchdog(watchdog)?;
+    // If no serve child running, spawn one.
+    if !child_alive() {
+        spawn_serve_child(verbose)?;
+    }
 
+    // Open pinned maps and write policy directly.
+    let mut limiter = Limiter::open_pinned(verbose)?;
     let applied = limiter.apply_single(&target, &rates)?;
     if applied == 0 {
         eprintln!("No cgroup found for '{target_str}'. Nothing to limit.");
-        limiter.detach();
         return Ok(());
     }
 
-    print_summary_line(target_str, &rates, applied, duration);
-    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
-    limiter.detach();
+    // Print summary and exit 0 — limit persists in background.
+    print_pin_summary(target_str, &rates, applied);
     Ok(())
 }
 
@@ -237,9 +455,9 @@ fn handle_strict_multi(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
-    watchdog: u64,
+    _watchdog: u64,
     allow_dangerous: bool,
-    duration: u64,
+    _duration: u64,
     verbose: bool,
 ) -> Result<()> {
     use crate::ebpf::limiter::{Limiter, Target};
@@ -280,26 +498,60 @@ fn handle_strict_multi(
         ));
     }
 
-    let watchdog = if watchdog < 5 { 5 } else { watchdog };
+    // If no serve child running, spawn one.
+    if !child_alive() {
+        spawn_serve_child(verbose)?;
+    }
 
-    let mut limiter = Limiter::attach(verbose)?;
-    limiter.refresh_watchdog(watchdog)?;
-
+    let mut limiter = Limiter::open_pinned(verbose)?;
     let applied = limiter.apply_group(&targets, &rates)?;
     if applied == 0 {
         eprintln!("No cgroups found for any target in '{targets_str}'. Nothing to limit.");
-        limiter.detach();
         return Ok(());
     }
 
-    print_summary_line(targets_str, &rates, applied, duration);
-    run_enforcement_loop(&mut limiter, watchdog, duration, verbose);
-    limiter.detach();
+    print_pin_summary(targets_str, &rates, applied);
     Ok(())
+}
+
+/// Print summary for pin mode (fire-and-forget).
+#[cfg(feature = "ebpf")]
+fn print_pin_summary(target_str: &str, rates: &crate::ebpf::limiter::RateSpec, applied: usize) {
+    let dl_str = rates
+        .download
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let ul_str = rates
+        .upload
+        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .unwrap_or_default();
+    let parts: Vec<&str> = [
+        if !dl_str.is_empty() {
+            dl_str.as_str()
+        } else {
+            ""
+        },
+        if !ul_str.is_empty() {
+            ul_str.as_str()
+        } else {
+            ""
+        },
+    ]
+    .iter()
+    .filter(|s| !s.is_empty())
+    .copied()
+    .collect();
+
+    eprintln!(
+        "Limiting '{target_str}' to {} ({applied} policies, active in background)",
+        parts.join(" + ")
+    );
+    eprintln!("Run 'zelynic unstrict {target_str}' to remove, 'zelynic status' to check.");
 }
 
 /// Print the one-liner summary line for strict commands.
 #[cfg(feature = "ebpf")]
+#[allow(dead_code)]
 fn print_summary_line(
     target_str: &str,
     rates: &crate::ebpf::limiter::RateSpec,
@@ -365,37 +617,55 @@ fn handle_unstrict(target_str: &str, verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let target = Target::parse(target_str);
+    if !child_alive() {
+        eprintln!("No active limits. Nothing to remove.");
+        return Ok(());
+    }
 
-    // Attach temporarily (we need BPF loaded to access maps).
-    let mut limiter = Limiter::attach(verbose)?;
+    let target = Target::parse(target_str);
+    let mut limiter = Limiter::open_pinned(verbose)?;
     let removed = limiter.unstrict(&target)?;
 
     if removed == 0 {
-        eprintln!("[limiter] No active limits found for '{target_str}'");
+        eprintln!("No active limits found for '{target_str}'");
     } else {
         eprintln!(
-            "[limiter] Removed {removed} limit{} for '{target_str}'",
+            "Removed {removed} limit{} for '{target_str}'",
             if removed == 1 { "" } else { "s" }
         );
     }
 
-    limiter.detach();
+    // If no policies remain, kill serve child (no residue).
+    let dl = limiter
+        .read_policies_public(crate::ebpf::limiter::Direction::Download)
+        .unwrap_or_default();
+    let ul = limiter
+        .read_policies_public(crate::ebpf::limiter::Direction::Upload)
+        .unwrap_or_default();
+    if dl.is_empty() && ul.is_empty() {
+        kill_serve_child()?;
+        if verbose {
+            eprintln!("[limiter] No policies remain — serve child killed, no residue");
+        }
+    }
+
     Ok(())
 }
 
 #[cfg(feature = "ebpf")]
-fn handle_unstrict_all(verbose: bool) -> Result<()> {
-    use crate::ebpf::limiter::Limiter;
-
+fn handle_unstrict_all(_verbose: bool) -> Result<()> {
     if !nix::unistd::geteuid().is_root() {
         eprintln!("zelynic requires root. Run with sudo.");
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let mut limiter = Limiter::attach(verbose)?;
-    limiter.unstrict_all()?;
-    limiter.detach();
+    if !child_alive() {
+        eprintln!("No active limits. Nothing to remove.");
+        return Ok(());
+    }
+
+    kill_serve_child()?;
+    eprintln!("All limits removed, serve child killed, no residue.");
     Ok(())
 }
 
@@ -408,10 +678,14 @@ fn handle_status(verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let mut limiter = Limiter::attach(verbose)?;
+    if !child_alive() {
+        eprintln!("No active limits.");
+        return Ok(());
+    }
+
+    let mut limiter = Limiter::open_pinned(verbose)?;
     limiter.refresh_identity();
     limiter.print_status();
-    limiter.detach();
     Ok(())
 }
 
@@ -535,6 +809,7 @@ fn parse_rates(
 }
 
 #[cfg(feature = "ebpf")]
+#[allow(dead_code)]
 fn run_enforcement_loop(
     limiter: &mut crate::ebpf::limiter::Limiter,
     watchdog: u64,
@@ -575,6 +850,7 @@ fn run_enforcement_loop(
 
 /// Print a compact one-line status (quiet mode).
 #[cfg(feature = "ebpf")]
+#[allow(dead_code)]
 fn print_compact_status(limiter: &crate::ebpf::limiter::Limiter) {
     use crate::ebpf::limiter::Direction;
     use std::collections::HashMap;

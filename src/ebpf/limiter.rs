@@ -15,7 +15,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use aya::{
-    maps::{Array as BpfArray, HashMap as BpfHashMap},
+    maps::{Array as BpfArray, HashMap as BpfHashMap, MapData},
     programs::{CgroupAttachMode, CgroupSkb, CgroupSkbAttachType},
     Ebpf,
 };
@@ -449,66 +449,111 @@ impl Limiter {
             group_id,
         };
 
-        let map_name = format!("cgroup_policy_{}", direction.suffix());
-        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
-        let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
-            bpf.map_mut(&map_name)
-                .context(format!("{map_name} not found"))?,
-        )
-        .context(format!("Failed to access {map_name}"))?;
-
-        map.insert(cgroup_id, raw, 0)
-            .map_err(|e| anyhow!("Failed to write policy: {e}"))?;
+        if let Some(bpf) = self.bpf.as_mut() {
+            // Ephemeral mode: use Ebpf object.
+            let map_name = format!("cgroup_policy_{}", direction.suffix());
+            let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
+                bpf.map_mut(&map_name)
+                    .context(format!("{map_name} not found"))?,
+            )
+            .context(format!("Failed to access {map_name}"))?;
+            map.insert(cgroup_id, raw, 0)
+                .map_err(|e| anyhow!("Failed to write policy: {e}"))?;
+        } else {
+            // Pin mode: open pinned map.
+            let pin_path = self.pinned_policy_path(direction);
+            let map_data = MapData::from_pin(&pin_path)
+                .map_err(|e| anyhow!("pinned map {pin_path}: {e:?}"))?;
+            let mut map_obj = aya::maps::Map::HashMap(map_data);
+            let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(&mut map_obj)
+                .context(format!("Failed to open pinned map {pin_path}"))?;
+            map.insert(cgroup_id, raw, 0)
+                .map_err(|e| anyhow!("Failed to write policy: {e}"))?;
+        }
         Ok(())
     }
 
     /// Delete a policy from BPF map. Returns Ok(true) if deleted, Ok(false) if not found.
     fn delete_policy(&mut self, cgroup_id: u32, direction: Direction) -> Result<bool> {
-        let map_name = format!("cgroup_policy_{}", direction.suffix());
-        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
-        let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
-            bpf.map_mut(&map_name)
-                .context(format!("{map_name} not found"))?,
-        )
-        .context(format!("Failed to access {map_name}"))?;
-
-        match map.remove(&cgroup_id) {
-            Ok(()) => Ok(true),
-            Err(_) => Ok(false), // key not found = no policy to delete
+        if let Some(bpf) = self.bpf.as_mut() {
+            let map_name = format!("cgroup_policy_{}", direction.suffix());
+            let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
+                bpf.map_mut(&map_name)
+                    .context(format!("{map_name} not found"))?,
+            )
+            .context(format!("Failed to access {map_name}"))?;
+            match map.remove(&cgroup_id) {
+                Ok(()) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        } else {
+            let pin_path = self.pinned_policy_path(direction);
+            let map_data = MapData::from_pin(&pin_path)
+                .map_err(|e| anyhow!("pinned map {pin_path}: {e:?}"))?;
+            let mut map_obj = aya::maps::Map::HashMap(map_data);
+            let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(&mut map_obj)
+                .context(format!("Failed to open pinned map {pin_path}"))?;
+            match map.remove(&cgroup_id) {
+                Ok(()) => Ok(true),
+                Err(_) => Ok(false),
+            }
         }
     }
 
     /// Read all policies from a direction map.
     fn read_policies(&self, direction: Direction) -> Result<Vec<(u32, PolicyRaw)>> {
-        let map_name = format!("cgroup_policy_{}", direction.suffix());
-        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
-        let map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
-            bpf.map(&map_name)
-                .context(format!("{map_name} not found"))?,
-        )
-        .context(format!("Failed to access {map_name}"))?;
-
-        let mut results = Vec::new();
-        for (key, value) in map.iter().flatten() {
-            results.push((key, value));
+        if let Some(bpf) = self.bpf.as_ref() {
+            let map_name = format!("cgroup_policy_{}", direction.suffix());
+            let map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(
+                bpf.map(&map_name)
+                    .context(format!("{map_name} not found"))?,
+            )
+            .context(format!("Failed to access {map_name}"))?;
+            let mut results = Vec::new();
+            for (key, value) in map.iter().flatten() {
+                results.push((key, value));
+            }
+            Ok(results)
+        } else {
+            let pin_path = self.pinned_policy_path(direction);
+            let map_data = MapData::from_pin(&pin_path)
+                .map_err(|e| anyhow!("pinned map {pin_path}: {e:?}"))?;
+            let map_obj = aya::maps::Map::HashMap(map_data);
+            let map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(&map_obj)
+                .context(format!("Failed to open pinned map {pin_path}"))?;
+            let mut results = Vec::new();
+            for (key, value) in map.iter().flatten() {
+                results.push((key, value));
+            }
+            Ok(results)
         }
-        Ok(results)
     }
 
     /// Read enforcement stats.
     fn read_stats(&self) -> Result<Vec<(u32, LimiterStatsRaw)>> {
-        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
-        let map: BpfHashMap<_, u32, LimiterStatsRaw> = BpfHashMap::try_from(
-            bpf.map("cgroup_limiter_stats")
-                .context("cgroup_limiter_stats not found")?,
-        )
-        .context("Failed to access cgroup_limiter_stats")?;
-
-        let mut results = Vec::new();
-        for (key, value) in map.iter().flatten() {
-            results.push((key, value));
+        if let Some(bpf) = self.bpf.as_ref() {
+            let map: BpfHashMap<_, u32, LimiterStatsRaw> = BpfHashMap::try_from(
+                bpf.map("cgroup_limiter_stats")
+                    .context("cgroup_limiter_stats not found")?,
+            )
+            .context("Failed to access cgroup_limiter_stats")?;
+            let mut results = Vec::new();
+            for (key, value) in map.iter().flatten() {
+                results.push((key, value));
+            }
+            Ok(results)
+        } else {
+            // Pin mode: stats map is not pinned. Return empty.
+            Ok(Vec::new())
         }
-        Ok(results)
+    }
+
+    /// Get the pin path for a policy map.
+    fn pinned_policy_path(&self, direction: Direction) -> String {
+        match direction {
+            Direction::Download => "/sys/fs/bpf/zelynic/cgroup_policy_dl".to_string(),
+            Direction::Upload => "/sys/fs/bpf/zelynic/cgroup_policy_ul".to_string(),
+        }
     }
 
     /// Clear all entries from a policy map. Returns count removed.
@@ -638,6 +683,34 @@ impl Limiter {
     /// Force-refresh identity map. Returns number of cgroups resolved.
     pub fn refresh_identity(&mut self) -> usize {
         self.identity.refresh()
+    }
+
+    /// Pin a BPF map to the given path. Allows parent process to access maps.
+    pub fn pin_map(&self, map_name: &str, pin_path: &str) -> Result<()> {
+        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
+        bpf.map(map_name)
+            .context(format!("{map_name} not found"))?
+            .pin(pin_path)
+            .context(format!("Failed to pin {map_name} to {pin_path}"))?;
+        Ok(())
+    }
+
+    /// Open pinned maps for read/write access (no BPF program load needed).
+    /// Used by parent process to access policies managed by serve child.
+    pub fn open_pinned(verbose: bool) -> Result<Self> {
+        let mut limiter = Limiter {
+            bpf: None, // No Ebpf object — using pinned maps directly
+            cgroup_path: "/sys/fs/cgroup".to_string(),
+            identity: IdentityMap::new(),
+            verbose,
+        };
+
+        let resolved = limiter.identity.refresh();
+        if verbose {
+            eprintln!("[limiter] Identity map: {} cgroups resolved", resolved);
+        }
+
+        Ok(limiter)
     }
 
     /// Detach BPF programs.

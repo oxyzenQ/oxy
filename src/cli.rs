@@ -48,6 +48,10 @@ pub struct Cli {
     /// Show comprehensive help
     #[arg(long = "help-all", global = false)]
     pub help_all: bool,
+
+    /// [internal] Serve mode — run as background BPF keeper. Do not use directly.
+    #[arg(long = "serve", global = false, hide = true)]
+    pub serve: bool,
 }
 
 #[derive(Subcommand, Debug)]
