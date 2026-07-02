@@ -2,26 +2,24 @@
 name = "zelynic"
 version = "3.1.1"
 edition = "2021"
-description = "Per-process network shaping and bandwidth control for Linux"
+description = "Pure eBPF network rate limiter for Linux (Wolf Architecture)"
 authors = ["rezky_nightky (oxyzenQ) <with dot rezky at gmail dot com>"]
 license = "GPL-3.0-only"
 repository = "https://github.com/oxyzenQ/zelynic"
 readme = "README.md"
-keywords = ["bandwidth", "network", "linux", "traffic-control", "rate-limiting"]
+keywords = ["ebpf", "bandwidth", "network", "linux", "rate-limiting"]
 categories = ["command-line-utilities", "network-programming"]
 rust-version = "1.88.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap_mangen = "0.2"
 colored = "3"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nix = { version = "0.31", features = ["process", "fs", "feature", "user"] }
-time = "0.3.47"
-crossterm = "0.29"
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 
@@ -45,9 +43,4 @@ overflow-checks = false
 incremental = false
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["html_reports"] }
 serde = { version = "1", features = ["derive"] }
-
-[[bench]]
-name = "monitor_bench"
-harness = false

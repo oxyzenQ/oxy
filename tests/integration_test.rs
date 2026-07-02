@@ -215,8 +215,8 @@ fn test_backend_info() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("backend"),
-        "Backend info should contain 'backend'"
+        stdout.to_lowercase().contains("backend") || stdout.contains("eBPF"),
+        "Backend info should contain 'backend' or 'eBPF', got: {stdout}"
     );
 }
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Wolf Architecture Branch (Legacy Code Removal — Pure eBPF)
+
+- **Legacy code removed**: ~17,000 LOC of `tc`/`nft`/`systemd-wrapper`/
+  `accounting`/`monitor`/`profile`/`qos`/`tui`/`units`/`auto`/`watch` code
+  deleted from `wolf-architecture` branch. Zelynic is now **pure eBPF** on
+  this branch — no combined tools, no wrapper coordination.
+- **Result**: 3,271 LOC Rust + 334 LOC BPF C = 3,605 total (79% reduction
+  from ~17,000 LOC legacy).
+- **Removed modules**: `src/limiter/` (14 files), `src/systemd_wrapper/`
+  (20+ files), `src/accounting/` (15+ files), `src/commands/{strict,run,auto,
+  monitor,profile,ledger,usage,usage_delta,strict_run_lab}.rs`, `src/{profile,
+  qos,monitor,watch,auto,tui,units,log}.rs`, `src/capabilities/{detect,render,
+  scoring,systemd,types}.rs`, `benches/`.
+- **Removed CLI commands**: `strict`, `unstrict`, `refresh`, `status`, `clean`,
+  `run`, `auto`, `list`, `log`, `watch`, `profile`, `qos`, `ledger`, `usage`,
+  `strict-run-lab`, `--iface` flag.
+- **Removed dependencies**: `crossterm`, `ratatui`, `time`, `criterion`.
+  Added: `clap_mangen`.
+- **Simplified `capabilities` module**: replaced tc/nft/systemd scoring matrix
+  with simple eBPF-only detection (cgroup v2, BPF fs, root, kernel version).
+- **Simplified CLI**: 4 commands only — `ebpf`, `backend`, `completions`, `man`.
+- **Updated `main.rs`**: removed `--iface` flag handling (no longer needed —
+  eBPF attaches to cgroup v2 root, not per-interface).
+- **Updated `Cargo.toml`**: description → "Pure eBPF network rate limiter
+  for Linux (Wolf Architecture)", keywords updated to `ebpf`-first.
+
 ### Added — Wolf Architecture Branch (Safety Layer)
 
 - **BPF self-destruct watchdog (Priority 1 — CRITICAL)**: New `watchdog_deadline`

@@ -1,158 +1,186 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
-/// Read-only host capability detection and backend scoring.
-///
-/// Backend Doctor intentionally avoids commands that mutate tc, nftables,
-/// cgroups, or kernel module state. Results are best-effort and are meant to
-/// guide the user toward the safest backend to validate with `strict --diagnose`.
+
+//! Capability detection (Wolf Architecture — eBPF only).
+//!
+//! Simplified from the legacy tc/nft/systemd scoring matrix. Now only
+//! detects: cgroup v2, BPF filesystem, kernel version, root privileges.
+
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
-mod detect;
-mod render;
-mod scoring;
-mod systemd;
-mod types;
+/// System information relevant to eBPF support.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemInfo {
+    pub kernel: String,
+    pub cgroup_v2: bool,
+    pub cgroup2_mount_path: Option<String>,
+    pub bpf_fs_mounted: bool,
+    pub is_root: bool,
+}
 
-use detect::{detect_capabilities, detect_system_info};
-use render::print_backend_doctor_report;
-use scoring::{recommend_backend, score_backend_candidates};
+/// Capability detection result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityReport {
+    pub system: SystemInfo,
+    pub ebpf_supported: bool,
+    pub warnings: Vec<String>,
+}
 
-pub use types::*;
+/// Detect system capabilities for eBPF.
+pub fn detect() -> CapabilityReport {
+    let system = detect_system();
+    let ebpf_supported = system.cgroup_v2 && system.bpf_fs_mounted;
 
-pub fn run_backend_doctor(json: bool) -> Result<()> {
-    let report = detect_backend_doctor_report();
+    let mut warnings = Vec::new();
+    if !system.cgroup_v2 {
+        warnings.push("cgroup v2 not detected. eBPF observer requires cgroup v2.".to_string());
+    }
+    if !system.bpf_fs_mounted {
+        warnings.push("BPF filesystem not mounted at /sys/fs/bpf.".to_string());
+    }
+    if !system.is_root {
+        warnings.push("Not running as root. eBPF operations require root.".to_string());
+    }
+
+    CapabilityReport {
+        system,
+        ebpf_supported,
+        warnings,
+    }
+}
+
+/// Detect basic system info.
+fn detect_system() -> SystemInfo {
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let cgroup2_mount_path = find_cgroup2_mount();
+    let cgroup_v2 = cgroup2_mount_path.is_some();
+
+    let bpf_fs_mounted = PathBuf::from("/sys/fs/bpf").exists();
+
+    let is_root = nix::unistd::geteuid().is_root();
+
+    SystemInfo {
+        kernel,
+        cgroup_v2,
+        cgroup2_mount_path,
+        bpf_fs_mounted,
+        is_root,
+    }
+}
+
+/// Find cgroup v2 mount point by parsing /proc/mounts.
+fn find_cgroup2_mount() -> Option<String> {
+    let mounts = std::fs::read_to_string("/proc/mounts").ok()?;
+    for line in mounts.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 && parts[2] == "cgroup2" {
+            return Some(parts[1].to_string());
+        }
+    }
+    None
+}
+
+/// Run capability detection and print report.
+pub fn run_doctor(json: bool) -> Result<()> {
+    let report = detect();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print_backend_doctor_report(&report);
+        print_report(&report);
     }
     Ok(())
 }
 
-pub fn detect_backend_doctor_report() -> BackendDoctorReport {
-    let system = detect_system_info();
-    let capabilities = detect_capabilities(&system);
-    let backend_candidates = score_backend_candidates(&system, &capabilities);
-    let recommended_backend = recommend_backend(&backend_candidates).map(str::to_string);
-    let notes = vec![
-        "Backend Doctor does not modify nftables, tc, or cgroups.".to_string(),
-        "Status meanings: supported = host likely has requirements; partial = requirements or implementation work remain; future = not implemented as an active strict backend.".to_string(),
-        "Strict mode is only truly validated after a real zelynic strict --diagnose test.".to_string(),
-        "Systemd scope wrapper/run mode is experimental groundwork and dry-run only.".to_string(),
-    ];
-    let mut warnings = Vec::new();
+fn print_report(report: &CapabilityReport) {
+    use colored::Colorize;
 
-    if system.cgroup_mode != CgroupMode::PureV2 {
-        warnings
-            .push("Host is not pure cgroup v2; strict backend behavior may differ.".to_string());
-    }
-    if capabilities.nft_socket_cgroupv2 != CapabilityStatus::Likely
-        && capabilities.nft_socket_cgroupv2 != CapabilityStatus::Yes
-    {
-        warnings.push("nft socket cgroupv2 support could not be proven safely.".to_string());
-    }
-    if recommended_backend.is_none() {
-        warnings
-            .push("No supported or partial backend candidate detected on this host.".to_string());
+    println!("{}", "━━━ zelynic eBPF Capability Doctor ━━━".bold());
+    println!();
+    println!("  Kernel:     {}", report.system.kernel);
+    println!(
+        "  cgroup v2:  {}",
+        if report.system.cgroup_v2 {
+            "YES".green().bold()
+        } else {
+            "NO".red().bold()
+        }
+    );
+    println!(
+        "  BPF fs:     {}",
+        if report.system.bpf_fs_mounted {
+            "YES".green().bold()
+        } else {
+            "NO".red().bold()
+        }
+    );
+    println!(
+        "  Root:       {}",
+        if report.system.is_root {
+            "YES".green().bold()
+        } else {
+            "NO".yellow().bold()
+        }
+    );
+    println!(
+        "  eBPF:       {}",
+        if report.ebpf_supported {
+            "SUPPORTED".green().bold()
+        } else {
+            "NOT SUPPORTED".red().bold()
+        }
+    );
+
+    if !report.warnings.is_empty() {
+        println!();
+        println!("{}", "Warnings:".yellow().bold());
+        for w in &report.warnings {
+            println!("  ⚠ {w}");
+        }
     }
 
-    BackendDoctorReport {
-        system,
-        capabilities,
-        backend_candidates,
-        recommended_backend,
-        notes,
-        warnings,
+    if report.ebpf_supported && report.system.is_root {
+        println!();
+        println!(
+            "  {} Run `zelynic ebpf observe` or `zelynic ebpf enforce --limit <target>:<rate>`",
+            "Ready:".green().bold()
+        );
     }
 }
+
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn tool(available: bool) -> ToolInfo {
-        ToolInfo {
-            available,
-            version: if available { "available" } else { "not found" }.to_string(),
-        }
-    }
-
-    fn system(cgroup_mode: CgroupMode, nft: bool, tc: bool, systemd: bool) -> SystemInfo {
-        SystemInfo {
-            kernel: "6.18.33-1-cachyos-lts".to_string(),
-            cgroup_mode,
-            cgroup2_mount_path: Some("/sys/fs/cgroup".to_string()),
-            cgroup2_mount_flags: vec!["rw".to_string(), "nosuid".to_string()],
-            nftables: tool(nft),
-            tc: tool(tc),
-            systemd: tool(systemd),
-            systemd_run: tool(systemd),
-        }
+    #[test]
+    fn test_detect_does_not_panic() {
+        // detect() should never panic, even in restricted environments.
+        let report = detect();
+        // We can't assert specific values (depends on environment), but
+        // the report should be well-formed.
+        assert!(!report.system.kernel.is_empty());
     }
 
     #[test]
-    fn doctor_report_serializes_to_json() {
-        let report = BackendDoctorReport {
-            system: system(CgroupMode::PureV2, true, true, true),
-            capabilities: CapabilityMatrix {
-                cgroup_v2: CapabilityStatus::Yes,
-                nft_socket_cgroupv2: CapabilityStatus::Likely,
-                tc_htb: CapabilityStatus::Likely,
-                fw_filter: CapabilityStatus::Likely,
-                conntrack_mark: CapabilityStatus::Likely,
-                bpf_fs_mounted: CapabilityStatus::Yes,
-                ebpf: CapabilityStatus::RequiresRoot,
-                transient_scope_wrapper: CapabilityStatus::Likely,
+    fn test_capability_report_serializes() {
+        let report = CapabilityReport {
+            system: SystemInfo {
+                kernel: "6.18.0".to_string(),
+                cgroup_v2: true,
+                cgroup2_mount_path: Some("/sys/fs/cgroup".to_string()),
+                bpf_fs_mounted: true,
+                is_root: false,
             },
-            backend_candidates: vec![BackendCandidate {
-                name: "modern-cgroupv2-nft-tc".to_string(),
-                status: BackendCandidateStatus::Supported,
-                confidence: 94,
-                missing_requirements: Vec::new(),
-                risk_notes: Vec::new(),
-            }],
-            recommended_backend: Some("modern-cgroupv2-nft-tc".to_string()),
-            notes: vec!["read-only".to_string()],
-            warnings: Vec::new(),
+            ebpf_supported: true,
+            warnings: vec![],
         };
-
         let json = serde_json::to_string(&report).unwrap();
-
-        assert!(json.contains("modern-cgroupv2-nft-tc"));
-        assert!(json.contains("pure-v2"));
-    }
-
-    #[test]
-    fn doctor_report_serializes_no_recommendation_as_json_null() {
-        let report = BackendDoctorReport {
-            system: system(CgroupMode::Unknown, false, false, false),
-            capabilities: CapabilityMatrix {
-                cgroup_v2: CapabilityStatus::Unknown,
-                nft_socket_cgroupv2: CapabilityStatus::No,
-                tc_htb: CapabilityStatus::No,
-                fw_filter: CapabilityStatus::No,
-                conntrack_mark: CapabilityStatus::Unknown,
-                bpf_fs_mounted: CapabilityStatus::No,
-                ebpf: CapabilityStatus::No,
-                transient_scope_wrapper: CapabilityStatus::No,
-            },
-            backend_candidates: vec![BackendCandidate {
-                name: "unavailable".to_string(),
-                status: BackendCandidateStatus::Unavailable,
-                confidence: 99,
-                missing_requirements: vec!["tc".to_string()],
-                risk_notes: Vec::new(),
-            }],
-            recommended_backend: None,
-            notes: Vec::new(),
-            warnings: vec![
-                "No supported or partial backend candidate detected on this host.".to_string(),
-            ],
-        };
-
-        let json = serde_json::to_string(&report).unwrap();
-
-        assert!(json.contains(r#""recommended_backend":null"#));
-        assert!(json.contains("No supported or partial backend candidate detected"));
+        assert!(json.contains("cgroup_v2"));
+        assert!(json.contains("ebpf_supported"));
     }
 }

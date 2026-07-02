@@ -145,6 +145,7 @@ pub fn check_ebpf_support() -> EbpfSupport {
 
 /// Result of eBPF support check.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EbpfSupport {
     pub supported: bool,
     pub kernel_version: String,
@@ -156,6 +157,7 @@ pub struct EbpfSupport {
 
 impl EbpfSupport {
     /// Print support status to console.
+    #[allow(dead_code)]
     pub fn print_status(&self) {
         let is_root = nix::unistd::geteuid().is_root();
 
@@ -321,6 +323,7 @@ impl Backend {
 }
 
 /// Print current backend info.
+#[allow(dead_code)]
 pub fn print_backend_info() {
     let ebpf_support = check_ebpf_support();
 

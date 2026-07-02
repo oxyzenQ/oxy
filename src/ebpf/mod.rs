@@ -3,7 +3,9 @@
 
 //! eBPF observer + limiter engine — real kernel-level traffic observation and enforcement.
 
-#![cfg_attr(feature = "ebpf", allow(dead_code))]
+// When ebpf feature is off, the modules are compiled out but ebpf_legacy
+// re-exports + colored import may produce dead_code warnings. Suppress them.
+#![allow(dead_code, unused_imports)]
 
 #[cfg(feature = "ebpf")]
 pub mod audit;
