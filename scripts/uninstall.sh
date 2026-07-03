@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Uninstall zelynic. Auto-detects installation location.
-# Checks: /usr/bin, /usr/local/bin, ~/.local/bin
+# Removes binary + BPF objects from all known locations.
 #
 # Usage:
 #   ./scripts/uninstall.sh           → auto-detect + remove
@@ -14,11 +14,10 @@ set -euo pipefail
 PROJECT_NAME="zelynic"
 FOUND=false
 
-# Check all common install locations
+# Check all common binary locations
 for BINDIR in "/usr/bin" "/usr/local/bin" "${HOME}/.local/bin"; do
     BINARY="${BINDIR}/${PROJECT_NAME}"
     if [[ -f "${BINARY}" ]]; then
-        # Check if we have permission to remove
         if [[ -w "${BINDIR}" ]]; then
             rm -f "${BINARY}"
             echo "${PROJECT_NAME} removed from ${BINARY}"
@@ -27,6 +26,19 @@ for BINDIR in "/usr/bin" "/usr/local/bin" "${HOME}/.local/bin"; do
             echo "${PROJECT_NAME} found at ${BINARY} (requires sudo)"
             echo "  sudo rm -f ${BINARY}"
             FOUND=true
+        fi
+    fi
+done
+
+# Check all common BPF object locations
+for BPFDIR in "/usr/lib/zelynic" "/usr/local/lib/zelynic" "${HOME}/.local/lib/zelynic"; do
+    if [[ -d "${BPFDIR}" ]]; then
+        if [[ -w "${BPFDIR}" ]]; then
+            rm -rf "${BPFDIR}"
+            echo "BPF objects removed from ${BPFDIR}/"
+        else
+            echo "BPF objects found at ${BPFDIR} (requires sudo)"
+            echo "  sudo rm -rf ${BPFDIR}"
         fi
     fi
 done

@@ -75,6 +75,15 @@ create_archive() {
     # Copy binary
     install -m755 "$binary_path" "$pkg_dir/zelynic"
 
+    # Copy BPF objects (pre-compiled — users don't need clang)
+    install -dm755 "$pkg_dir/bpf"
+    if [[ -f "bpf/limiter.bpf.o" ]]; then
+        install -m644 bpf/limiter.bpf.o "$pkg_dir/bpf/"
+    fi
+    if [[ -f "bpf/observer.bpf.o" ]]; then
+        install -m644 bpf/observer.bpf.o "$pkg_dir/bpf/"
+    fi
+
     # Copy documentation
     install -m644 README.md "$pkg_dir/"
     install -m644 LICENSE "$pkg_dir/"

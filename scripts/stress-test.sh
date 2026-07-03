@@ -25,8 +25,12 @@ if [[ ! -x "$BINARY" ]]; then
 fi
 
 if [[ ! -f "$BPF_OBJ" ]]; then
-    echo "Compiling BPF object..."
-    clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o "$BPF_OBJ"
+    if command -v clang >/dev/null 2>&1; then
+        echo "Compiling BPF object..."
+        clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o "$BPF_OBJ"
+    else
+        echo "BPF object not found. Using pre-compiled or skipping."
+    fi
 fi
 
 echo "━━━ zelynic Stress Test (${DURATION}s) ━━━"
