@@ -72,14 +72,14 @@ fi
 echo ""
 echo "Test 2: Override rate (500kb → 100kb → 1mb)"
 $BINARY strict-single "$TARGET" 100kb 2>&1
-sleep 1
-$BINARY strict-single "$TARGET" 1mb 2>&1
 sleep 2
+$BINARY strict-single "$TARGET" 1mb 2>&1
+sleep 3
 
 STATUS=$($BINARY status 2>&1)
-ACTIVE_DL=$(echo "$STATUS" | grep "Active limits" | grep -oE '[0-9]+ dl' | grep -oE '^[0-9]+' || echo "0")
 # Count unique cgroups in status (should not duplicate)
-CGROUP_COUNT=$(echo "$STATUS" | grep -c 'cg:' || echo "0")
+CGROUP_COUNT=$(echo "$STATUS" | grep -c 'cg:' || true)
+CGROUP_COUNT=${CGROUP_COUNT:-0}
 if [[ "$CGROUP_COUNT" -le 2 ]]; then
     pass "Override works (no duplicates: $CGROUP_COUNT cgroups)"
 else

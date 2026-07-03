@@ -39,15 +39,10 @@ debug = false
 strip = true        # Strip debug symbols → smaller binary
 lto = "fat"         # Full LTO → best cross-crate optimization
 codegen-units = 1   # Single codegen unit → best optimization
-panic = "abort"     # Abort on panic → smaller binary, no unwind tables
+panic = "unwind"    # Must be unwind — aya BPF library can panic internally
+                    # on map operations. With abort, serve child dies instantly.
 overflow-checks = false
 incremental = false
-
-# Separate profile for eBPF builds — needs debug info for BPF verifier
-[profile.release-ebpf]
-inherits = "release"
-debug = true         # Keep debug info for BPF verifier diagnostics
-panic = "unwind"     # Need unwind for aya error handling
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
