@@ -8,7 +8,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[allow(dead_code)]
 pub const NAME: &str = "zelynic";
 pub fn build_target() -> &'static str {
-    std::env::consts::ARCH
+    // Map Rust's internal arch name to the project's user-facing label.
+    // `x86_64` -> `amd64`; all others pass through unchanged.
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        other => other,
+    }
 }
 pub const COPYRIGHT: &str = "(c) 2026 rezky_nightky (oxyzenQ)";
 pub const LICENSE: &str = "GPL-3.0";
@@ -43,7 +48,7 @@ pub fn print_version() {
 ///
 /// ```text
 /// Version: v2.0.0
-/// Build: linux-x86_64 (ad36a81)
+/// Build: linux-amd64 (ad36a81)
 /// Copyright: (c) 2026 rezky_nightky (oxyzenQ)
 /// License: GPL-3.0
 /// Source: https://github.com/oxyzenQ/zelynic
