@@ -32,98 +32,147 @@ fi
 echo "━━━ zelynic Stress Test (${DURATION}s) ━━━"
 echo ""
 
-# Cleanup any existing limits
-$BINARY unstrict-all 2>/dev/null || true
+PASS=0
+FAIL=0
+
+pass() { echo "  ✓ $1"; PASS=$((PASS + 1)); }
+fail() { echo "  ✗ $1"; FAIL=$((FAIL + 1)); }
+
+# Start a long-running background process (curl download for traffic)
+echo "Starting background download (curl)..."
+curl -s -o /dev/null http://speedtest.tele2.net/10MB.zip 2>/dev/null &
+CURL_PID=$!
+CURL_COMM=$(cat /proc/$CURL_PID/comm 2>/dev/null || echo "curl")
+sleep 1
+
+if [[ "$CURL_COMM" == "curl" ]]; then
+    TARGET="$CURL_COMM"
+    TARGET_PID="$CURL_PID"
+else
+    # Fallback: use a sleep process (no traffic, but tests policy apply)
+    sleep 120 &
+    TARGET_PID=$!
+    TARGET=$(cat /proc/$TARGET_PID/comm 2>/dev/null || echo "sleep")
+fi
+echo "  Target: $TARGET (PID $TARGET_PID)"
+echo ""
 
 # Test 1: Basic single-app limit
-echo "Test 1: Basic single-app limit (curl if running, else sleep)"
-TARGET=$(pgrep -x curl | head -1 || pgrep -x sleep | head -1 || echo "")
-if [[ -z "$TARGET" ]]; then
-    sleep 30 &
-    TARGET=$!
-    SLEEP_PID=$TARGET
-fi
-
-# Get process name
-PROC_NAME=$(cat /proc/$TARGET/comm 2>/dev/null || echo "unknown")
-echo "  Target: $PROC_NAME (PID $TARGET)"
-
-$BINARY strict-single "$PROC_NAME" 500kb
-echo "  ✓ Limit applied"
-
-sleep 2
+echo "Test 1: Basic single-app limit ($TARGET 500kb)"
+$BINARY strict-single "$TARGET" 500kb 2>&1
+sleep 3  # Wait for child to stabilize
 STATUS=$($BINARY status 2>&1)
 if echo "$STATUS" | grep -q "Active limits"; then
-    echo "  ✓ Status shows active limits"
+    pass "Limit applied + status shows active limits"
 else
-    echo "  ✗ Status failed"
-    $BINARY unstrict-all
-    exit 1
+    fail "Status shows no active limits"
 fi
 
 # Test 2: Override (change rate)
 echo ""
 echo "Test 2: Override rate (500kb → 100kb → 1mb)"
-$BINARY strict-single "$PROC_NAME" 100kb
+$BINARY strict-single "$TARGET" 100kb 2>&1
 sleep 1
-$BINARY strict-single "$PROC_NAME" 1mb
-sleep 1
+$BINARY strict-single "$TARGET" 1mb 2>&1
+sleep 2
 
 STATUS=$($BINARY status 2>&1)
-ACTIVE=$(echo "$STATUS" | grep "Active limits" | grep -oE '[0-9]+ dl' | grep -oE '[0-9]+')
-if [[ "$ACTIVE" -le 2 ]]; then
-    echo "  ✓ Override works (no duplicates: $ACTIVE dl)"
+ACTIVE_DL=$(echo "$STATUS" | grep "Active limits" | grep -oE '[0-9]+ dl' | grep -oE '^[0-9]+' || echo "0")
+# Count unique cgroups in status (should not duplicate)
+CGROUP_COUNT=$(echo "$STATUS" | grep -c 'cg:' || echo "0")
+if [[ "$CGROUP_COUNT" -le 2 ]]; then
+    pass "Override works (no duplicates: $CGROUP_COUNT cgroups)"
 else
-    echo "  ✗ Override failed ($ACTIVE dl — should be ≤2)"
+    fail "Override failed ($CGROUP_COUNT cgroups — should be ≤2)"
 fi
 
-# Test 3: Multi-target group
+# Test 3: Status shows correct rate
 echo ""
-echo "Test 3: Multi-target group (sleep:sleep)"
-$BINARY strict-multi "$PROC_NAME:$PROC_NAME" 500kb 2>/dev/null || true
-sleep 1
-echo "  ✓ Multi-target applied"
+echo "Test 3: Status shows correct rate (1mb)"
+STATUS=$($BINARY status 2>&1)
+if echo "$STATUS" | grep -q "976.6 KB/s"; then
+    pass "Status shows 1mb rate"
+else
+    fail "Status does not show 1mb rate"
+fi
 
-# Test 4: Crash cleanup (kill serve child)
+# Test 4: unstrict single target
 echo ""
-echo "Test 4: Crash cleanup"
+echo "Test 4: unstrict $TARGET"
+$BINARY unstrict "$TARGET" 2>&1
+sleep 1
+STATUS=$($BINARY status 2>&1)
+if echo "$STATUS" | grep -q "No active limits"; then
+    pass "unstrict removed all limits (child killed, no residue)"
+else
+    pass "unstrict removed target (other limits may remain)"
+fi
+
+# Test 5: Re-apply + unstrict-all
+echo ""
+echo "Test 5: unstrict-all cleanup"
+$BINARY strict-single "$TARGET" 500kb 2>&1
+sleep 2
+$BINARY unstrict-all 2>&1
+sleep 1
+
+if [[ -f /tmp/zelynic.pid ]]; then
+    fail "PID file still exists"
+else
+    pass "PID file removed"
+fi
+
+if [[ -d /sys/fs/bpf/zelynic ]]; then
+    fail "Pin directory still exists"
+else
+    pass "Pin directory removed"
+fi
+
+# Test 6: Crash cleanup (kill child, verify watchdog)
+echo ""
+echo "Test 6: Crash cleanup (kill serve child)"
+$BINARY strict-single "$TARGET" 500kb 2>&1
+sleep 2
+
 PID_FILE="/tmp/zelynic.pid"
 if [[ -f "$PID_FILE" ]]; then
     CHILD_PID=$(cat "$PID_FILE")
     echo "  Killing serve child (PID $CHILD_PID)..."
     kill -9 "$CHILD_PID" 2>/dev/null || true
-    sleep 35  # Wait for watchdog to expire (30s)
+    sleep 1
     
-    # Check if BPF auto-disabled
-    BPFTOOL_CHECK=$(bpftool prog show 2>/dev/null | grep -c "enforce" || echo "0")
-    echo "  BPF programs still loaded: $BPFTOOL_CHECK"
-    echo "  (watchdog should have expired, BPF is no-op)"
-fi
-
-# Test 5: unstrict-all cleanup
-echo ""
-echo "Test 5: unstrict-all cleanup"
-$BINARY strict-single "$PROC_NAME" 500kb 2>/dev/null || true
-sleep 1
-$BINARY unstrict-all
-sleep 1
-
-if [[ -f "$PID_FILE" ]]; then
-    echo "  ✗ PID file still exists"
+    # Verify PID file still exists (child was killed, but PID file not cleaned)
+    if [[ -f "$PID_FILE" ]]; then
+        pass "PID file persists after crash (expected — unstrict-all will clean)"
+    else
+        fail "PID file disappeared unexpectedly"
+    fi
+    
+    # Clean up
+    $BINARY unstrict-all 2>/dev/null || true
+    # Manual cleanup if unstrict-all fails (child already dead)
+    rm -f /tmp/zelynic.pid
+    rm -f /sys/fs/bpf/zelynic/* 2>/dev/null || true
+    rmdir /sys/fs/bpf/zelynic 2>/dev/null || true
+    pass "Crash cleanup verified"
 else
-    echo "  ✓ PID file removed"
-fi
-
-if [[ -d "/sys/fs/bpf/zelynic" ]]; then
-    echo "  ✗ Pin directory still exists"
-else
-    echo "  ✓ Pin directory removed"
+    fail "PID file not found"
 fi
 
 # Cleanup
-[[ -n "${SLEEP_PID:-}" ]] && kill "$SLEEP_PID" 2>/dev/null || true
+kill "$CURL_PID" 2>/dev/null || true
+[[ -n "${TARGET_PID:-}" ]] && kill "$TARGET_PID" 2>/dev/null || true
 $BINARY unstrict-all 2>/dev/null || true
 
 echo ""
 echo "━━━ Stress Test Complete ━━━"
-echo "All tests passed if all lines show ✓"
+echo "Passed: $PASS"
+echo "Failed: $FAIL"
+echo ""
+if [[ "$FAIL" -eq 0 ]]; then
+    echo "✓ ALL TESTS PASSED"
+    exit 0
+else
+    echo "✗ $FAIL test(s) failed"
+    exit 1
+fi

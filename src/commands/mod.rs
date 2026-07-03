@@ -210,6 +210,7 @@ fn child_alive() -> bool {
 /// Spawn the serve child process. It loads BPF, pins maps, and keeps BPF alive.
 #[cfg(feature = "ebpf")]
 fn spawn_serve_child(verbose: bool) -> Result<()> {
+    use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let exe = std::env::current_exe().context("Failed to get current exe")?;
@@ -229,6 +230,20 @@ fn spawn_serve_child(verbose: bool) -> Result<()> {
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     cmd.stdin(std::process::Stdio::null());
+
+    // Critical: call setsid() in the child before exec.
+    // This creates a new session + process group, so the child is NOT
+    // killed when the parent exits (no SIGHUP). Without this, the child
+    // dies when the parent zelynic process exits.
+    unsafe {
+        cmd.pre_exec(|| {
+            // Create new session — detach from parent's process group.
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     let child = cmd.spawn().context("Failed to spawn serve child")?;
     let pid = child.id();

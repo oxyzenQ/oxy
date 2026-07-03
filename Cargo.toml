@@ -33,14 +33,21 @@ default = []
 ebpf = ["aya"]
 
 [profile.release]
+# Maximum optimization for production binary
 opt-level = 3
 debug = false
-strip = true
-lto = "thin"
-codegen-units = 1
-panic = "unwind"
+strip = true        # Strip debug symbols → smaller binary
+lto = "fat"         # Full LTO → best cross-crate optimization
+codegen-units = 1   # Single codegen unit → best optimization
+panic = "abort"     # Abort on panic → smaller binary, no unwind tables
 overflow-checks = false
 incremental = false
+
+# Separate profile for eBPF builds — needs debug info for BPF verifier
+[profile.release-ebpf]
+inherits = "release"
+debug = true         # Keep debug info for BPF verifier diagnostics
+panic = "unwind"     # Need unwind for aya error handling
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

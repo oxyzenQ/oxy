@@ -30,11 +30,26 @@ fi
 echo "━━━ zelynic Benchmark (${DURATION}s per test) ━━━"
 echo ""
 
-# Start a background download process (curl to fast.com-like endpoint)
-echo "Starting background download..."
-curl -s -o /dev/null http://speedtest.tele2.net/10MB.zip &
+# Start a long-running background download
+echo "Starting background download (curl 100MB)..."
+curl -s -o /dev/null http://speedtest.tele2.net/100MB.zip &
 CURL_PID=$!
 CURL_COMM=$(cat /proc/$CURL_PID/comm 2>/dev/null || echo "curl")
+
+# Wait for curl to start
+sleep 2
+
+# Verify curl is running
+if ! kill -0 "$CURL_PID" 2>/dev/null; then
+    echo "curl died, trying smaller file..."
+    curl -s -o /dev/null http://speedtest.tele2.net/10MB.zip &
+    CURL_PID=$!
+    CURL_COMM=$(cat /proc/$CURL_PID/comm 2>/dev/null || echo "curl")
+    sleep 1
+fi
+
+RESULTS_FILE="/tmp/zelynic-bench-results.txt"
+rm -f "$RESULTS_FILE"
 
 measure_overhead() {
     local label="$1"
@@ -42,7 +57,6 @@ measure_overhead() {
     
     echo "  Measuring: $label (${duration}s)..."
     
-    # Sample CPU + memory every 2 seconds
     local cpu_samples=()
     local mem_samples=()
     
@@ -50,11 +64,16 @@ measure_overhead() {
         # Get zelynic serve child CPU + memory
         if [[ -f /tmp/zelynic.pid ]]; then
             local pid=$(cat /tmp/zelynic.pid)
-            local stats=$(ps -p "$pid" -o %cpu,%rss --no-headers 2>/dev/null || echo "0 0")
-            local cpu=$(echo "$stats" | awk '{print $1}')
-            local mem_kb=$(echo "$stats" | awk '{print $2}')
-            cpu_samples+=("$cpu")
-            mem_samples+=("$mem_kb")
+            if kill -0 "$pid" 2>/dev/null; then
+                local stats=$(ps -p "$pid" -o %cpu,%rss --no-headers 2>/dev/null || echo "0 0")
+                local cpu=$(echo "$stats" | awk '{print $1}')
+                local mem_kb=$(echo "$stats" | awk '{print $2}')
+                cpu_samples+=("${cpu:-0}")
+                mem_samples+=("${mem_kb:-0}")
+            else
+                cpu_samples+=("0")
+                mem_samples+=("0")
+            fi
         else
             cpu_samples+=("0")
             mem_samples+=("0")
@@ -67,12 +86,16 @@ measure_overhead() {
     local mem_sum=0
     local count=${#cpu_samples[@]}
     
+    if [[ $count -eq 0 ]]; then
+        count=1
+    fi
+    
     for i in "${!cpu_samples[@]}"; do
-        cpu_sum=$(echo "$cpu_sum + ${cpu_samples[$i]}" | bc -l 2>/dev/null || echo "$cpu_sum")
-        mem_sum=$((mem_sum + ${mem_samples[$i]}))
+        cpu_sum=$(awk "BEGIN {print $cpu_sum + ${cpu_samples[$i]:-0}}")
+        mem_sum=$((mem_sum + ${mem_samples[$i]:-0}))
     done
     
-    local cpu_avg=$(echo "scale=2; $cpu_sum / $count" | bc -l 2>/dev/null || echo "0")
+    local cpu_avg=$(awk "BEGIN {printf \"%.2f\", $cpu_sum / $count}")
     local mem_avg=$((mem_sum / count))
     local mem_mb=$((mem_avg / 1024))
     
@@ -80,30 +103,30 @@ measure_overhead() {
     echo "    Memory: ${mem_mb} MB (${mem_avg} KB)"
     echo ""
     
-    echo "$label|$cpu_avg|$mem_mb" >> /tmp/zelynic-bench-results.txt
+    echo "$label|$cpu_avg|$mem_mb" >> "$RESULTS_FILE"
 }
 
-# Cleanup
+# Cleanup any existing limits
 $BINARY unstrict-all 2>/dev/null || true
-rm -f /tmp/zelynic-bench-results.txt
 
-# Test 1: No limit (baseline)
+# Test 1: No limit (baseline — measure curl overhead only)
 echo "Test 1: No limit (baseline)"
 measure_overhead "no-limit" "$DURATION"
 
 # Test 2: 1mb limit
 echo "Test 2: 1mb limit"
-$BINARY strict-single "$CURL_COMM" 1mb
-sleep 2
+$BINARY strict-single "$CURL_COMM" 1mb 2>&1
+sleep 3  # Wait for child to stabilize
 measure_overhead "1mb-limit" "$DURATION"
-$BINARY unstrict-all
+$BINARY unstrict-all 2>/dev/null || true
+sleep 1
 
-# Test 3: 100kb limit (aggressive)
+# Test 3: 100kb limit (aggressive — more packet drops = more BPF work)
 echo "Test 3: 100kb limit (aggressive)"
-$BINARY strict-single "$CURL_COMM" 100kb
-sleep 2
+$BINARY strict-single "$CURL_COMM" 100kb 2>&1
+sleep 3
 measure_overhead "100kb-limit" "$DURATION"
-$BINARY unstrict-all
+$BINARY unstrict-all 2>/dev/null || true
 
 # Cleanup
 kill "$CURL_PID" 2>/dev/null || true
@@ -115,9 +138,17 @@ printf "%-15s %10s %10s\n" "TEST" "CPU%" "MEM(MB)"
 printf "%-15s %10s %10s\n" "----" "----" "-------"
 while IFS='|' read -r label cpu mem; do
     printf "%-15s %10s %10s\n" "$label" "$cpu" "$mem"
-done < /tmp/zelynic-bench-results.txt
+done < "$RESULTS_FILE"
 
 echo ""
 echo "eBPF overhead is negligible if CPU < 1% and MEM < 10MB"
+echo ""
 
-rm -f /tmp/zelynic-bench-results.txt
+# Check if serve child was alive during tests
+if [[ "$(awk -F'|' '{print $2}' "$RESULTS_FILE" | awk '{s+=$1} END {print s}')" == "0" ]]; then
+    echo "⚠ WARNING: All CPU readings were 0 — serve child may not have been running."
+    echo "  Check: sudo zelynic -v strict-single curl 1mb"
+    echo "  The setsid() fix should prevent child from dying on parent exit."
+fi
+
+rm -f "$RESULTS_FILE"
