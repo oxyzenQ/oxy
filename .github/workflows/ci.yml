@@ -93,18 +93,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install clang + libbpf-dev + linux-headers
+      - name: Install clang + libbpf-dev + linux-libc-dev
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libbpf-dev
-          sudo apt-get install -y "linux-headers-$(uname -r)" || \
-            sudo apt-get install -y linux-headers-generic
+          sudo apt-get install -y clang libbpf-dev linux-libc-dev
 
       - name: Compile BPF observer
-        run: clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
+        run: >
+          clang -O2 -g -target bpf
+          -I/usr/include/$(uname -m)-linux-gnu
+          -c bpf/observer.bpf.c -o bpf/observer.bpf.o
 
       - name: Compile BPF limiter
-        run: clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
+        run: >
+          clang -O2 -g -target bpf
+          -I/usr/include/$(uname -m)-linux-gnu
+          -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
 
       - name: Verify BPF objects exist
         run: |
