@@ -5,11 +5,12 @@
 <h1 align="center">zelynic</h1>
 
 <p align="center">
-  <strong>Per-process network shaping and bandwidth control for Linux.</strong>
+  <strong>Per-app network rate limiter for Linux.</strong>
 </p>
 
 <p align="center">
-  Built on <code>tc</code>, <code>nftables</code>, and cgroup v2 to make per-process network behavior visible, predictable, and controllable from the terminal.
+  Pure eBPF enforcement — no <code>tc</code>, no <code>nftables</code>, no <code>systemd-wrapper</code>.<br>
+  One of the first open-source Linux bandwidth managers built around a pure eBPF datapath with per-application rate limiting.
 </p>
 
 <p align="center">
@@ -20,166 +21,170 @@
 
 ---
 
-## Overview
+## What is zelynic?
 
-zelynic is a Rust CLI tool for **observing and controlling network bandwidth per process on Linux**.
-
-It provides:
-
-- real-time per-process bandwidth monitoring
-- traffic shaping using Linux `tc` (HTB qdisc)
-- packet classification via `nftables`
-- process-aware control using `cgroup v2`
-- live terminal dashboard similar to `htop`, focused on network usage
-
-This tool is designed for **system-level observability and control**, not application-level networking.
-
-## Core Capabilities
-
-- **Per-process bandwidth control** — Attach bandwidth limits directly to running processes using cgroup-aware classification. (`zelynic strict`)
-- **Traffic shaping engine** — Powered by Linux `tc` (HTB qdisc) for deterministic rate limiting.
-- **Packet marking & routing control** — Uses `nftables` for classifying and tagging traffic flows.
-- **Real-time network observability** — Built on `ss` + kernel metrics for live throughput tracking. (`zelynic list --live`)
-- **QoS priority shaping** — Assign priority tiers instead of hard limits; idle bandwidth redistributes automatically. (`zelynic qos`)
-- **Auto-throttle daemon** — Background mode that enforces thresholds when aggregate usage spikes. (`zelynic auto`)
-- **Threshold alerts** — Watch bandwidth and alert when limits are exceeded. (`zelynic watch`)
-- **Named profiles** — Reusable bandwidth profiles (gaming, streaming, background). (`zelynic profile`)
-- **TUI dashboard** — htop-like interface showing process network usage, active limits, and live throughput per PID.
-
-## Architecture
-
-zelynic operates through three system layers:
+zelynic limits any app's download/upload speed using **eBPF** — the Linux kernel's
+built-in programmable packet filter. No external tools, no wrapper coordination,
+no daemon. Just pure kernel enforcement.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Process Layer (cgroup v2)                              │
-│  Maps processes to controllable network groups          │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Classification Layer (nftables)                        │
-│  Marks packets based on process group identity          │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  Shaping Layer (tc / HTB)                               │
-│  Enforces bandwidth policies at kernel level            │
-└─────────────────────────────────────────────────────────┘
+$ sudo zelynic strict-single brave 100kb
+Limiting 'brave' to 97.7 KB /s + 97.7 KB /s (2 policies, active in background)
+Run 'zelynic unstrict brave' to remove, 'zelynic status' to check.
+$ echo $?
+0
+# brave is now limited to 100 KB/s download + upload — persists in background
 ```
 
-## Philosophy
+## Why zelynic?
 
-zelynic follows three principles:
+| Traditional tools | zelynic |
+|-------------------|---------|
+| `tc` — per-interface shaping | Per-app (per-cgroup) shaping |
+| `nftables` — packet marking | Direct eBPF token bucket |
+| `wondershaper` — global limit | Individual app limits |
+| `trickle` — LD_PRELOAD hack | Kernel-level enforcement |
 
-- **Visibility First** — Every network action must be observable per process.
-- **Deterministic Control** — Bandwidth behavior must be predictable under load.
-- **Kernel-Aligned Design** — Leverages Linux-native primitives instead of reinventing networking logic.
+**Key difference**: zelynic limits **individual applications**, not interfaces.
+Brave can be limited to 100 KB/s while Firefox runs at full speed — all on the
+same WiFi interface.
 
 ## Quick Start
 
-```bash
-# List per-process network usage (default view)
-zelynic list
+### Prerequisites
 
-# Real-time TUI dashboard (htop for network)
-zelynic list --live
+- Linux kernel 5.13+ (cgroup v2 + `cgroup.id` file)
+- Root access (BPF requires `CAP_BPF`)
+- `clang` (compile BPF programs)
+- `libbpf-dev` (BPF headers)
 
-# Apply bandwidth limits to a process
-zelynic strict -d 500kb -u 500kb brave
-zelynic strict --preset gaming discord
-zelynic strict -d 1mb firefox
-
-# QoS priority shaping (no hard limits, priority-based)
-zelynic qos high brave
-zelynic qos low wget
-
-# Show active limits
-zelynic status
-
-# Remove limits from a process
-zelynic unstrict brave
-
-# Refresh a limit after the target process respawns
-zelynic refresh brave
-
-# Plan a systemd scope wrapper (dry-run, non-mutating)
-zelynic run --dry-run -d 500kbit -u 500kbit -- helium
-
-# Auto-throttle daemon (background, threshold-based)
-zelynic auto --download 100mb --upload 50mb
-
-# Inspect host capabilities (read-only)
-zelynic backend doctor
-```
-
-## Use Cases
-
-- Limit bandwidth per application
-- Control background process network usage
-- Enforce QoS-like behavior locally
-- Debug network-heavy processes
-- Observe per-process network spikes
-- Auto-manage bandwidth on unattended systems
-
-## Safety Model
-
-- No silent modifications — every change is logged and reversible.
-- All `zelynic run` actions are simulated by default (`--dry-run`); live execution requires explicit opt-in.
-- `zelynic strict` is the only validated active limiter path; `zelynic run --execute` remains experimental and non-mutating until live execution is deliberately implemented.
-- Use `zelynic strict --diagnose` to print target PID selection, cgroup v2, nftables, and tc diagnostics when validating a new host.
-
-## Requirements
-
-- Linux with **cgroup v2** (uniform hierarchy)
-- `nftables` ≥ 1.0
-- `iproute2` / `tc` ≥ 5.10
-- `systemd` (for `zelynic run` scope planning)
-- Root or `CAP_NET_ADMIN` for active limiting (`zelynic strict`, `qos`, `auto`); read-only commands (`list`, `status`, `backend`) work unprivileged
-
-See [docs/distro-matrix.md](docs/distro-matrix.md) for the full distribution support matrix with validation status.
-
-## Installation
-
-### From source
+### Build
 
 ```bash
 git clone https://github.com/oxyzenQ/zelynic.git
 cd zelynic
-./scripts/build.sh check-all
-./scripts/install.sh
+git checkout wolf-architecture
+
+# Compile BPF programs
+clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
+clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
+
+# Build Rust binary
+cargo build --release --features ebpf
 ```
 
-### From release tarball
-
-Download the latest tarball and checksum from [releases](https://github.com/oxyzenQ/zelynic/releases), verify, extract, and run `./install.sh`.
-
-### Shell completions
+### Usage
 
 ```bash
-zelynic completions bash    # or zsh, fish
-zelynic man                 # generate man page
+# Limit a single app (both download + upload = 100kb)
+sudo zelynic strict-single brave 100kb
+
+# Limit per-direction
+sudo zelynic strict-single firefox -d 1mb -u 500kb
+
+# Limit multiple apps sharing one rate (group limit)
+sudo zelynic strict-multi brave:curl:pacman 1mb
+
+# Check active limits
+sudo zelynic status
+
+# List apps with cgroup IDs
+sudo zelynic list-apps
+
+# Remove one app's limit
+sudo zelynic unstrict brave
+
+# Remove ALL limits (emergency)
+sudo zelynic unstrict-all
+
+# Real-time traffic monitor
+sudo zelynic observe --interval 5
+
+# Check eBPF support
+zelynic doctor
 ```
+
+## Rate Formats
+
+Lowercase units only:
+
+| Format | Meaning |
+|--------|---------|
+| `500b` | 500 bytes/second |
+| `100kb` | 100 kilobytes/second |
+| `1mb` | 1 megabyte/second |
+| `1gb` | 1 gigabyte/second |
+| `1000000` | Plain number = bytes/second |
+
+**Bounds**: minimum 1 KB/s, maximum 1 GB/s. Below minimum requires `--allow-dangerous`.
+
+## Safety Features
+
+- **Watchdog**: BPF auto-disables if zelynic crashes (default 30s timeout)
+- **Min-rate guard**: rejects rates below 1 KB/s (prevents bricking apps)
+- **Fire-and-forget**: `strict-single` exits 0, limit persists in background
+- **No residue**: `unstrict-all` kills child + removes all pin files
+- **Fail-safe BPF**: returns "allow" on any error path (never blocks on failure)
+
+## Architecture
+
+**Wolf Architecture** — pure eBPF, single hooking layer:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Layer 4 — Presentation (CLI)                           │
+│  strict-single / strict-multi / status / unstrict       │
+├─────────────────────────────────────────────────────────┤
+│  Layer 3 — Aggregation (delta computation, sorting)     │
+├─────────────────────────────────────────────────────────┤
+│  Layer 2 — Identity Resolution (/proc → cgroup ID)      │
+├─────────────────────────────────────────────────────────┤
+│  Layer 1 — Map Interface (aya, pinned maps)             │
+├─────────────────────────────────────────────────────────┤
+│  Layer 0 — BPF Programs (kernel)                        │
+│  cgroup_skb/ingress (download) + cgroup_skb/egress (upload) │
+└─────────────────────────────────────────────────────────┘
+```
+
+See [docs/WOLF_ARCHITECTURE.md](docs/WOLF_ARCHITECTURE.md) for full design.
+
+## Branches
+
+| Branch | Purpose | Status |
+|--------|---------|--------|
+| `main` | Legacy v3.x (tc/nft/systemd-wrapper) | Stable, maintained |
+| `wolf-architecture` | Pure eBPF v4.0.0-alpha | Active development |
 
 ## Documentation
 
-- [Validation reports](docs/validation.md) — validated hosts and methodology
-- [Distro matrix](docs/distro-matrix.md) — distribution support status
-- [Scope Lab](docs/scope-lab.md) — `zelynic run` design and probe findings
-- [Ledger inspect (phase 14)](docs/v3.1-phase-14-ledger-inspect-user-docs-examples-polish.md) — fixture-driven ledger inspection docs
-- [Ledger export (phase 18)](docs/v3.1-phase-18-ledger-export-user-docs-examples-polish.md) — JSON export gate design
-- [CHANGELOG](CHANGELOG.md) — release history
+- [Wolf Architecture](docs/WOLF_ARCHITECTURE.md) — design + principles
+- [Kernel Compatibility](docs/KERNEL_COMPATIBILITY.md) — requirements + distro matrix
+- [Migration to v4.0](docs/MIGRATION_V4.md) — v3.x → v4.0 guide
+- [Stress Test](scripts/stress-test.sh) — long-running enforcement test
+- [Benchmark](scripts/benchmark.sh) — CPU/memory overhead measurement
 
-## Project Status
+## Verification
 
-`zelynic strict` is validated on tested modern cgroup v2 hosts (CachyOS/Arch with kernel 6.18+, nftables 1.1+, tc 7.0+). Other modern systemd + cgroup v2 distributions are candidates pending explicit validation. See the [distro matrix](docs/distro-matrix.md) for details.
+Real test results (Arch Linux, kernel 6.18, AMD Ryzen 7 5800HS):
+
+| App | Target | Actual Download | Actual Upload | Status |
+|-----|--------|-----------------|---------------|--------|
+| Chromium | -d 100kb -u 500kb | 670 Kbps (83 KB/s) | 3.5 Mbps | ✅ Working |
+| Brave | -d 100kb -u 500kb | 730 Kbps (91 KB/s) | 4.3 Mbps | ✅ Working |
+| aria2c | 500→100→10→2kb | Override each time | — | ✅ Override works |
+
+CPU/memory: negligible (serve child < 1% CPU, < 10 MB RAM).
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+GPL-3.0-only
+
+## Author
+
+**rezky_nightky (oxyzenQ)** — built with curiosity, not pressure.
 
 ---
 
 <p align="center">
-  <sub>Linux-first • cgroup-aware • process-level control</sub><br>
-  <sub>Part of the <a href="https://github.com/oxyzenQ">oxyzenQ</a> ecosystem.</sub>
+  <em>Clean safely. Explain every decision. Recover anything.</em>
 </p>

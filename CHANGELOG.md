@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Wolf Architecture — v4.0.0-alpha Milestone
+
+Pure eBPF rate limiter. One of the first open-source Linux bandwidth managers
+built around a pure eBPF datapath with per-application rate limiting.
+
+**LOC reduction**: ~17,000 (v3.x legacy) → ~3,600 (v4.0 pure eBPF) = **79% reduction**
+
+**Verified on**: Arch Linux (CachyOS), kernel 6.18, AMD Ryzen 7 5800HS, WiFi.
+Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb target.
+
+#### Phase Summary
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| W1 | ✅ Done | Feature parity (observer + limiter + identity + safety) |
+| W4a | ✅ Done | CLI redesign (strict-single/multi, lowercase units, positional rate) |
+| W4b | ✅ Done | Rate bounds (min 1kb, max 1gb) |
+| W4c | ✅ Done | Fire-and-forget (child process + pinned maps) |
+| W4d | ✅ Done | v4.0.0-alpha milestone |
+| W5 | 🔄 In Progress | Production hardening (stress test, benchmark, cross-distro CI) |
+| W6 | ⬜ Pending | v4.0.0 release (after approval + cross-distro testing) |
+
+#### Key Features
+
+- **Per-app limiting**: `strict-single brave 100kb` — limits brave, not interface
+- **Per-direction**: `-d 100kb -u 500kb` — separate download/upload rates
+- **Group limiting**: `strict-multi brave:curl:pacman 1mb` — shared token bucket
+- **Fire-and-forget**: strict commands exit 0, limit persists in background
+- **Override**: re-running strict replaces old rate (no duplicates)
+- **Watchdog**: BPF auto-disables if zelynic crashes (30s timeout)
+- **Min-rate guard**: rejects < 1 KB/s (prevents bricking apps)
+- **No residue**: `unstrict-all` kills child + removes all pin files
+- **Lowercase units**: `100kb`, `1mb`, `1gb` (no uppercase, no `/s` suffix)
+
+#### Verification Results (Arch Linux, kernel 6.18)
+
+| Test | Target | Result | Status |
+|------|--------|--------|--------|
+| Single-app | brave 100kb | 730 Kbps (91 KB/s) | ✅ |
+| Per-direction | chromium -d 100kb -u 500kb | 670 Kbps / 3.5 Mbps | ✅ |
+| Override | aria2c 500→100→10→2kb | Each override applied | ✅ |
+| Multi-target | brave:chromium:aria2c 500kb | All 3 limited | ✅ |
+| Fire-and-forget | exit 0, limit persists | Background enforcement | ✅ |
+| Crash cleanup | kill child → 30s → BPF no-op | Auto-recovery | ✅ |
+| unstrict-all | Remove all + cleanup | No residue | ✅ |
+| CPU/memory | Serve child | < 1% CPU, < 10 MB RAM | ✅ |
+
 ### Added — Wolf Architecture Branch (Legacy Code Removal — Pure eBPF)
 
 - **Legacy code removed**: ~17,000 LOC of `tc`/`nft`/`systemd-wrapper`/

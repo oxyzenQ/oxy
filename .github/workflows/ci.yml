@@ -8,12 +8,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, wolf-architecture]
     paths:
       - '**/*.rs'
       - '**/*.toml'
       - '**/*.sh'
       - '**/*.py'
+      - '**/*.c'
       - 'Cargo.lock'
       - 'build.rs'
       - 'rust-toolchain*'
@@ -22,12 +23,13 @@ on:
       - 'scripts/**'
       - '.github/workflows/**'
   pull_request:
-    branches: [main]
+    branches: [main, wolf-architecture]
     paths:
       - '**/*.rs'
       - '**/*.toml'
       - '**/*.sh'
       - '**/*.py'
+      - '**/*.c'
       - 'Cargo.lock'
       - 'build.rs'
       - 'rust-toolchain*'
@@ -84,6 +86,35 @@ jobs:
 
       - name: Verify release build
         run: cargo build --release --locked
+
+  ebpf-build:
+    name: eBPF Build (Wolf Architecture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install clang + libbpf-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libbpf-dev linux-headers-$(uname -r) 2>/dev/null || sudo apt-get install -y clang libbpf-dev
+
+      - name: Compile BPF observer
+        run: clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
+
+      - name: Compile BPF limiter
+        run: clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
+
+      - name: Verify BPF objects exist
+        run: |
+          test -f bpf/observer.bpf.o
+          test -f bpf/limiter.bpf.o
+          echo "✓ BPF objects compiled successfully"
+
+      - name: Build Rust with ebpf feature
+        run: cargo build --features ebpf --locked
+
+      - name: Run tests with ebpf feature
+        run: cargo test --features ebpf --locked
 
   workflow_quality:
     name: Workflow lint + codespell

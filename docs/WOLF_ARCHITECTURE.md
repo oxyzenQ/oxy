@@ -131,34 +131,45 @@ This branch is the staging ground for the pure-eBPF rewrite. The legacy
 - [x] Layer 2: `IdentityMap` with /proc reverse-lookup + 10s TTL refresh
 - [x] Layer 3: `CounterSummary` with delta computation + sorting
 - [x] Layer 4: `print(&IdentityMap)` with human-readable labels
-- [x] Layer 0: `bpf/limiter.bpf.c` — cgroup_skb/egress token-bucket enforcer
-- [x] Layer 1: `apply_policies()` writes to `cgroup_policy` map
+- [x] Layer 0: `bpf/limiter.bpf.c` — cgroup_skb token-bucket enforcer (ingress + egress)
+- [x] Layer 0: `bpf_skb_cgroup_id(skb)` for correct cgroup attribution
+- [x] Layer 1: `apply_single()` + `apply_group()` write to policy maps
 - [x] Layer 1: `read_stats()` reads from `cgroup_limiter_stats` map
-- [x] Layer 4: `zelynic ebpf enforce --limit <target>:<rate>` CLI
+- [x] Layer 1: BPF map pinning (`/sys/fs/bpf/zelynic/*`) for fire-and-forget
+- [x] Layer 2: Direct /proc lookup for process name → cgroup ID resolution
+- [x] Layer 4: `strict-single` / `strict-multi` / `unstrict` / `status` CLI
+- [x] Layer 4: Lowercase units (kb/mb/gb) + positional rate + per-direction (-d/-u)
 - [x] Fail-safe: BPF returns 1 (allow) on every error path
+- [x] Watchdog: BPF auto-disables if zelynic crashes (30s timeout)
+- [x] Min-rate guard: rejects < 1 KB/s (prevents bricking apps)
+- [x] Fire-and-forget: strict commands exit 0, limit persists via child process
+- [x] No residue: `unstrict-all` kills child + removes all pin files
+- [x] Override: re-running strict replaces old rate (no duplicates)
+- [x] Legacy code removed: ~17,000 LOC → ~3,600 LOC (79% reduction)
+- [x] Verified: real enforcement on Arch Linux, kernel 6.18, AMD Ryzen 7
 
-### Next
-- [ ] Layer 1: BPF map pinning (`/sys/fs/bpf/zelynic_*`) for persistent
-      policies that survive zelynic exit
+### Next (Phase W5 — Production Hardening)
+- [ ] Cross-distro testing (Ubuntu LTS, Fedora, Debian, openSUSE)
+- [ ] Kernel version testing (5.13, 6.1 LTS, 6.6 LTS, 6.12+)
+- [ ] Stress test: `scripts/stress-test.sh`
+- [ ] Benchmark: `scripts/benchmark.sh` (CPU/memory overhead)
 - [ ] Layer 4: `--json` output for tooling integration
-- [ ] Layer 4: `--cgroup <id>` and `--min-bytes <N>` filters for observer
-- [ ] Layer 0: ingress counter (cgroup_skb/ingress or XDP)
-- [ ] Deprecate `tc`/`nft`/`systemd-wrapper` code paths on this branch
 
 ### Future (post-v4.0)
 - [ ] Layer 0: `bpf/policer.bpf.c` — DSCP marking via `sock_ops`
-- [ ] Layer 0: XDP ingress counter (separate from cgroup_skb/egress)
+- [ ] Layer 0: XDP ingress counter (separate from cgroup_skb)
 - [ ] Layer 2: cgroup path → systemd unit name resolution
-- [ ] Layer 4: TUI dashboard (ratatui, already a dependency)
-- [ ] Layer 0: per-process (not just per-cgroup) enforcement via `bpf_get_current_pid_tgid`
+- [ ] Layer 4: TUI dashboard
+- [ ] Layer 0: per-process (not just per-cgroup) enforcement
 
 ## Non-Goals
 
 - **No Windows support.** Ever.
 - **No macOS/BSD support for the `ebpf` feature.** Source compiles, feature
   is no-op.
-- **No daemon mode.** Every invocation is one-shot. If you want continuous
-  monitoring, use a shell loop or systemd timer.
+- **No daemon mode.** Every invocation is one-shot. Fire-and-forget uses a
+  minimal child process (sleeps + refreshes watchdog), not a daemon. The child
+  dies on `unstrict` or system reboot.
 - **No combined-tool fallback.** If BPF can't do it, wolf-architecture zelynic
   doesn't do it. The legacy `tc`/`nft` code stays on `main` for users who
   need it, but this branch is pure eBPF.
@@ -168,11 +179,10 @@ This branch is the staging ground for the pure-eBPF rewrite. The legacy
 
 - `main` — legacy zelynic v3.x line (`tc`/`nft`/`systemd-wrapper`). Tagged
   releases continue here until wolf-architecture is production-ready.
-- `wolf-architecture` — pure eBPF rewrite. No tags, no releases until
-  limiter.bpf.c is proven stable and the legacy enforcement paths are
-  deprecated.
-- `intergalaxion` — archived (44 commits of planning docs, 0 BPF programs).
-  Superseded by `wolf-architecture`.
+- `wolf-architecture` — pure eBPF rewrite. v4.0.0-alpha milestone. Active
+  development. Will merge to `main` as v4.0.0 after cross-distro testing.
+- `intergalaxion` — **deleted** (was 44 commits of planning docs, 0 BPF programs).
+  Superseded by `wolf-architecture` which ships real code.
 
 ## Naming
 
