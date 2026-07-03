@@ -48,7 +48,7 @@ jobs:
       - name: Prepare release artifacts
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          PKG_NAME="zelynic-v${VERSION}-x86_64-linux"
+          PKG_NAME="zelynic-v${VERSION}-linux-amd64"
           mkdir -p "dist/${PKG_NAME}/man"
 
           # Copy binary
@@ -112,7 +112,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           CURRENT_TAG="${GITHUB_REF_NAME}"
-          PKG_NAME="zelynic-v${VERSION}-x86_64-linux"
+          PKG_NAME="zelynic-v${VERSION}-linux-amd64"
 
           # Find previous stable release tag for changelog range.
           # Snapshot/pre-release helper tags such as v2.0.0-stable-snapshot

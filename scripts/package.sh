@@ -116,12 +116,12 @@ main() {
     install -dm755 dist
 
     log_info "=== Building x86_64 (glibc) ==="
-    BIN_X64=$(build_target "x86_64-unknown-linux-gnu" "x86_64-linux")
-    ARCHIVE_X64=$(create_archive "$VERSION" "x86_64-linux" "$BIN_X64")
+    BIN_X64=$(build_target "x86_64-unknown-linux-gnu" "linux-amd64")
+    ARCHIVE_X64=$(create_archive "$VERSION" "linux-amd64" "$BIN_X64")
 
     log_info "=== Building x86_64 (musl - static) ==="
-    BIN_MUSL=$(build_target "x86_64-unknown-linux-musl" "x86_64-linux-musl")
-    ARCHIVE_MUSL=$(create_archive "$VERSION" "x86_64-linux-musl" "$BIN_MUSL")
+    BIN_MUSL=$(build_target "x86_64-unknown-linux-musl" "linux-amd64-musl")
+    ARCHIVE_MUSL=$(create_archive "$VERSION" "linux-amd64-musl" "$BIN_MUSL")
 
     echo
     log_success "Packaging complete!"
