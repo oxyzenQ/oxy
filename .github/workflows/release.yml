@@ -14,10 +14,10 @@ env:
 
 jobs:
   # ===========================================================================
-  # Build Release Binary (x86_64 Linux only)
+  # Build Release Binary (amd64 Linux only, with eBPF support)
   # ===========================================================================
   build:
-    name: Build Release Binary
+    name: Build Release Binary (eBPF)
     runs-on: ubuntu-latest
 
     steps:
@@ -31,6 +31,11 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
 
+      - name: Install BPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libbpf-dev linux-libc-dev
+
       - name: Cache cargo registry & build
         uses: actions/cache@v5
         with:
@@ -42,23 +47,50 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-x86_64-unknown-linux-gnu-cargo-release-
 
-      - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu --locked
+      - name: Compile BPF objects
+        run: |
+          set -e
+          ARCH_INCLUDE=""
+          if [[ -d "/usr/include/$(uname -m)-linux-gnu" ]]; then
+            ARCH_INCLUDE="-I/usr/include/$(uname -m)-linux-gnu"
+          fi
+          clang -O2 -g -target bpf ${ARCH_INCLUDE} \
+              -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
+          clang -O2 -g -target bpf ${ARCH_INCLUDE} \
+              -c bpf/observer.bpf.c -o bpf/observer.bpf.o
+          echo "=== BPF objects compiled ==="
+          ls -lh bpf/*.bpf.o
+
+      - name: Build release binary (with eBPF feature)
+        run: cargo build --release --target x86_64-unknown-linux-gnu --locked --features ebpf
+
+      - name: Verify binary has eBPF support
+        run: |
+          ./target/x86_64-unknown-linux-gnu/release/zelynic -V
+          ./target/x86_64-unknown-linux-gnu/release/zelynic doctor || true
 
       - name: Prepare release artifacts
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           PKG_NAME="zelynic-v${VERSION}-linux-amd64"
-          mkdir -p "dist/${PKG_NAME}/man"
+          mkdir -p "dist/${PKG_NAME}/man" "dist/${PKG_NAME}/bpf"
 
           # Copy binary
           cp target/x86_64-unknown-linux-gnu/release/zelynic "dist/${PKG_NAME}/zelynic"
+          chmod +x "dist/${PKG_NAME}/zelynic"
+
+          # Copy pre-compiled BPF objects (users don't need clang)
+          cp bpf/limiter.bpf.o  "dist/${PKG_NAME}/bpf/"
+          cp bpf/observer.bpf.o "dist/${PKG_NAME}/bpf/"
 
           # Copy documentation
           cp README.md LICENSE "dist/${PKG_NAME}/"
 
+          # Copy install script (for end-user convenience)
+          cp scripts/install.sh "dist/${PKG_NAME}/install.sh"
+          chmod +x "dist/${PKG_NAME}/install.sh"
+
           # Generate man page
-          chmod +x "dist/${PKG_NAME}/zelynic"
           "./dist/${PKG_NAME}/zelynic" man > "dist/${PKG_NAME}/man/zelynic.1" 2>/dev/null || true
           if [ -f "dist/${PKG_NAME}/man/zelynic.1" ]; then
             gzip -f "dist/${PKG_NAME}/man/zelynic.1"
@@ -87,7 +119,7 @@ jobs:
           path: dist/*
 
   # ===========================================================================
-  # Create GitHub Release with Changelog
+  # Create GitHub Release
   # ===========================================================================
   release:
     name: Create GitHub Release
@@ -107,91 +139,10 @@ jobs:
           name: release-artifacts
           path: dist
 
-      - name: Generate release body
-        id: release_body
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          PKG_NAME="zelynic-v${VERSION}-linux-amd64"
-
-          # Find previous stable release tag for changelog range.
-          # Snapshot/pre-release helper tags such as v2.0.0-stable-snapshot
-          # must not be used as the baseline for a stable release.
-          PREV_TAG=$(git tag --sort=-version:refname \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | grep -v "^${CURRENT_TAG}$" \
-            | head -n 1 || true)
-
-          # Build changelog (last 20 non-trivial commits only)
-          if [ -n "${PREV_TAG}" ]; then
-            RANGE="${PREV_TAG}..${CURRENT_TAG}"
-          else
-            RANGE="$(git rev-list --max-parents=0 HEAD)...${CURRENT_TAG}"
-          fi
-
-          # Get commit count (excluding trivial commits)
-          COMMIT_COUNT=$(git log "${RANGE}" --no-merges --oneline \
-            --invert-grep --grep='^fmt$' --grep='^check next' \
-            | wc -l | tr -d ' ')
-
-          RELEASE_FILE="/tmp/release_body.md"
-
-          # --- Header: description only (title is set via 'name' field, no duplication) ---
-          {
-            echo "Easy userspace bandwidth manager for Linux — x86_64"
-            echo ""
-
-            # --- Install ---
-            echo '### Install'
-            echo '```bash'
-            echo "tar -xzf ${PKG_NAME}.tar.gz"
-            echo "install -Dm755 ${PKG_NAME}/zelynic \"\\$HOME/.local/bin/zelynic\""
-            echo '```'
-            echo ""
-
-            # --- Verify ---
-            echo '### Verify'
-            echo '```bash'
-            echo "sha512sum -c ${PKG_NAME}.tar.gz.sha512sum"
-            echo '```'
-            echo ""
-
-            # --- Quick Start ---
-            echo '### Quick Start'
-            echo '```bash'
-          } > "${RELEASE_FILE}"
-          {
-            echo 'zelynic list --live                             # Real-time TUI dashboard'
-            echo 'sudo zelynic strict -d 1mb brave                # Limit bandwidth'
-            echo 'sudo zelynic strict --preset gaming discord      # Use preset'
-            echo 'zelynic --help-all                              # All commands'
-            echo '```'
-            echo ""
-
-            # --- Changelog summary (compact) ---
-            echo "---"
-            COMPARE_URL="https://github.com/oxyzenQ/zelynic/compare/"
-            COMPARE_URL="${COMPARE_URL}${PREV_TAG:-$(git rev-list --max-parents=0 HEAD | cut -c1-7)}...${CURRENT_TAG}"
-            echo "**${COMMIT_COUNT} changes** since ${PREV_TAG:-first commit}  |  [Full Changelog](${COMPARE_URL})"
-          } >> "${RELEASE_FILE}"
-
-          # Feed to GITHUB_OUTPUT
-          {
-            echo "release_body<<BODY_EOF"
-            cat "${RELEASE_FILE}"
-            echo "BODY_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          echo ""
-          echo "=== Release Body ==="
-          cat "${RELEASE_FILE}"
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Zelynic ${{ github.ref_name }}"
           files: dist/*
-          body: ${{ steps.release_body.outputs.release_body }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
