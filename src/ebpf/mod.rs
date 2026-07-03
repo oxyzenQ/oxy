@@ -16,6 +16,8 @@ pub mod identity;
 #[cfg(feature = "ebpf")]
 pub mod limiter;
 #[cfg(feature = "ebpf")]
+pub mod limiter_types;
+#[cfg(feature = "ebpf")]
 pub mod loader;
 
 // Re-export capability detection (always available)
