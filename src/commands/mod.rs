@@ -6,6 +6,9 @@
 pub(crate) mod backend;
 pub(crate) mod help;
 
+#[cfg(not(feature = "ebpf"))]
+use anyhow::Result;
+#[cfg(feature = "ebpf")]
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 

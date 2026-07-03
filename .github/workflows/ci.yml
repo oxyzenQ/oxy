@@ -96,7 +96,7 @@ jobs:
       - name: Install clang + libbpf-dev
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libbpf-dev linux-headers-$(uname -r) 2>/dev/null || sudo apt-get install -y clang libbpf-dev
+          sudo apt-get install -y clang libbpf-dev || true
 
       - name: Compile BPF observer
         run: clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o

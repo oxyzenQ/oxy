@@ -77,7 +77,7 @@ fn test_strict_unstrict_cycle() {
         .spawn()
         .expect("Failed to start sleep process");
 
-    let pid = sleep_cmd.id();
+    let _pid = sleep_cmd.id();
 
     thread::sleep(Duration::from_millis(100));
 
