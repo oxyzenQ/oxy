@@ -1,196 +1,88 @@
 # Contributing to zelynic
 
-Thank you for your interest in contributing to zelynic! This document provides
-guidelines and information for developers.
+Thank you for your interest in contributing to zelynic! This document covers
+the build process, project structure, and coding standards.
 
-## Development Setup
+## Prerequisites
 
-### Prerequisites
+- Rust 1.88+ (stable)
+- clang 10+ (compile BPF programs)
+- libbpf-dev (BPF headers)
+- linux-libc-dev (multiarch kernel headers)
+- Linux kernel 5.13+ (cgroup v2 + cgroup.id file)
 
-- **Rust** 1.88.0 or later (see `rust-version` in `Cargo.toml`)
-- **Linux** system (required for testing, as zelynic uses Linux-specific APIs)
-- **Root access** (required for testing bandwidth limiting functionality)
-
-### Clone and Build
-
-```bash
-git clone https://github.com/oxyzenQ/zelynic.git
-cd zelynic
-cargo build --release
-```
-
-### Run Tests
+## Build
 
 ```bash
-# Run unit tests
-cargo test
+# Compile BPF programs
+clang -O2 -g -target bpf -I/usr/include/$(uname -m)-linux-gnu \
+  -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
+clang -O2 -g -target bpf -I/usr/include/$(uname -m)-linux-gnu \
+  -c bpf/observer.bpf.c -o bpf/observer.bpf.o
 
-# Run all quality checks
-./scripts/build.sh check-all
-```
-
-### Build with Features
-
-```bash
-# Default build (tc/cgroup backend only)
-cargo build --release
-
-# With eBPF support (requires kernel headers)
+# Build Rust binary
 cargo build --release --features ebpf
-
-# Static binary with musl
-cargo build --release --target x86_64-unknown-linux-musl
-```
-
-## Code Style
-
-### Formatting
-
-Use `cargo fmt` to ensure consistent formatting:
-
-```bash
-cargo fmt --all
-```
-
-### Linting
-
-All code must pass Clippy lints:
-
-```bash
-cargo clippy -- -D warnings
-```
-
-### Commit Messages
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer(s)]
-```
-
-Types:
-- `feat` — New feature
-- `fix` — Bug fix
-- `docs` — Documentation only
-- `style` — Code style (formatting, no logic change)
-- `refactor` — Code refactoring
-- `perf` — Performance improvement
-- `test` — Adding or fixing tests
-- `chore` — Maintenance tasks
-
-Examples:
-```
-feat(limiter): add cgroup v2 pure support
-fix(monitor): handle missing /proc/net/tcp entries
-docs(readme): update installation instructions
 ```
 
 ## Project Structure
 
 ```
 src/
-├── main.rs       # CLI entry point, command routing
-├── cli.rs        # Clap CLI definitions
-├── limiter.rs    # Bandwidth limiting (tc/cgroup)
-├── monitor.rs    # Bandwidth monitoring (ss parsing)
-├── ebpf.rs       # eBPF backend foundation
-├── tui.rs        # ratatui TUI implementation
-├── qos.rs        # QoS priority shaping
-├── auto.rs       # Auto-throttle daemon
-├── watch.rs      # Bandwidth watch/alert
-├── log.rs        # Historical tracking
-├── profile.rs    # Named profiles
-├── info.rs       # Version and build info
-└── units.rs      # Bandwidth unit parsing
+  main.rs              — entry point
+  cli.rs               — CLI definition (clap)
+  commands/mod.rs      — command dispatchers
+  commands/help.rs     — --help-all output
+  commands/backend.rs  — completions + man page
+  ebpf/
+    mod.rs             — module exports
+    limiter.rs         — Limiter struct + BPF map operations
+    limiter_types.rs   — types, constants, helper functions
+    identity.rs        — cgroup ID → process name resolution
+    loader.rs          — observer BPF loader
+    audit.rs           — JSONL audit log
+  ebpf_legacy.rs       — kernel capability detection
+  capabilities/mod.rs  — eBPF support check (doctor)
+  info.rs              — version + build info
+  update.rs            — --check-update
+
+bpf/
+  limiter.bpf.c        — token-bucket enforcer (ingress + egress)
+  observer.bpf.c       — traffic counter (egress)
+
+scripts/
+  build.sh             — check-all orchestration
+  check-policy.py      — LOC + copyright + SPDX check
+  stress-test.sh       — 6-test stress suite
+  leak-test.sh         — orphan detection after every operation
+  distros-depth-test.sh — 17-test comprehensive suite
+  long-endurance-test.sh — 24h continuous enforcement
+  benchmark.sh         — CPU/memory overhead measurement
 ```
 
-## Testing
+## Coding Standards
 
-### Manual Testing
+1. **LOC limit**: < 1000 lines per file (enforced by `check-policy.py`)
+2. **Copyright + SPDX**: every source file must have:
+   ```
+   // Copyright (C) 2026 rezky_nightky
+   // SPDX-License-Identifier: GPL-3.0-only
+   ```
+3. **License**: GPL-3.0-only
+4. **No tc/nft/systemd-wrapper**: pure eBPF only on `wolf-architecture` branch
+5. **Fail-safe**: BPF programs return 1 (allow) on every error path
+6. **Lowercase units**: rate formats use `kb`, `mb`, `gb` (no uppercase, no `/s`)
 
-When testing bandwidth limiting, use `iperf3` or `curl` with `--limit-rate`:
+## Pre-commit
 
 ```bash
-# Terminal 1: Start iperf3 server
-iperf3 -s
-
-# Terminal 2: Limit a process
-sudo ./target/release/zelynic strict -d 1mb iperf3
-
-# Terminal 3: Run client (should be limited)
-iperf3 -c localhost
+./scripts/build.sh check-all
 ```
 
-### Testing Checklist
+This runs: cargo fmt --check, cargo clippy --all-features -D warnings,
+cargo test --locked, cargo deny check all, python3 scripts/check-policy.py,
+yamllint, codespell, actionlint.
 
-Before submitting a PR, verify:
+## Branch Strategy
 
-- [ ] `cargo build --release` succeeds
-- [ ] `cargo test` passes
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] `cargo fmt --all` produces no changes
-- [ ] `./scripts/build.sh check-all` passes
-- [ ] `zelynic --help` shows updated commands
-- [ ] Man page generates correctly (`zelynic man`)
-
-## Architecture
-
-### Backend Selection
-
-zelynic supports two backends:
-
-1. **tc/cgroup** (default) — Works on all Linux systems, uses traffic control
-2. **eBPF** (optional) — Lower overhead, requires kernel 5.2+ and CAP_BPF
-
-The backend is auto-selected at runtime based on system capabilities.
-
-### Bandwidth Limiting Flow
-
-1. **Parse target** → Resolve process name to PID(s)
-2. **Create cgroup** → Move process to new cgroup
-3. **Setup tc** → Add HTB qdisc and class
-4. **Apply filter** → Match cgroup classid to tc class
-5. **Persist state** → Save to `/run/zelynic/state.json`
-
-### Monitoring Flow
-
-1. **Collect stats** → Parse `/proc/net/tcp`, `/proc/net/udp`, `ss -tan`
-2. **Build inode cache** → Map socket inodes to PIDs via `/proc/*/fd/`
-3. **Aggregate** → Sum bytes by process
-4. **Display** → Render with ratatui or output as JSON
-
-## Performance Considerations
-
-- `/proc` scanning is the main overhead at high process counts
-- Inode cache is rebuilt on each monitoring cycle (consider LRU caching)
-- eBPF backend eliminates `/proc` scanning (future optimization)
-
-## Security
-
-- zelynic requires root for `tc`, `cgcreate`, and `/proc` access
-- CAP_NET_ADMIN alone is insufficient for full functionality
-- State files are stored in `/run/zelynic/` with 0755 permissions. Runtime cgroups and nftables identifiers also use the `zelynic` namespace.
-
-## Release Process
-
-1. Update `CHANGELOG.md` with new version
-2. Update version in `Cargo.toml`
-3. Run `./scripts/build.sh check-all` to verify
-4. Tag release: `git tag v2.0.0`
-5. Push tag: `git push origin v2.0.0`
-6. GitHub Actions builds and uploads release artifacts
-
-## Questions?
-
-- Open an [issue](https://github.com/oxyzenQ/zelynic/issues) for bugs
-- Start a [discussion](https://github.com/oxyzenQ/zelynic/discussions) for questions
-- Read the [ROADMAP.md](ROADMAP.md) for future plans
-
-## License
-
-By contributing, you agree that your contributions will be licensed under
-the GNU General Public License v3.0.
+- `main` — legacy v3.x (tc/nft/systemd-wrapper). Stable, maintained.
+- `wolf-architecture` — pure eBPF v4.0.0-alpha. Active development.

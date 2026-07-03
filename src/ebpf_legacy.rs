@@ -11,9 +11,6 @@
 /// 2. The kernel supports eBPF (Linux 5.2+ for basic, 5.8+ for BPF LSM)
 /// 3. The user has CAP_BPF capability (or root)
 ///
-/// Falls back to tc/cgroup backend if eBPF is unavailable.
-#[cfg(feature = "ebpf")]
-use anyhow::{bail, Result};
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
@@ -348,41 +345,5 @@ pub fn print_backend_info() {
             "  {} eBPF: likely supported (run with sudo to verify)",
             "?".yellow()
         );
-    }
-}
-
-/// eBPF limiter - only available when ebpf feature is enabled.
-#[cfg(feature = "ebpf")]
-#[allow(dead_code)]
-pub struct EbpfLimiter {
-    // TODO: Add aya::Bpf and program handles
-}
-
-#[cfg(feature = "ebpf")]
-#[allow(dead_code)]
-impl EbpfLimiter {
-    /// Create new eBPF limiter (if supported).
-    pub fn new() -> Result<Option<Self>> {
-        if !check_ebpf_support().supported {
-            return Ok(None);
-        }
-
-        // TODO: Load BPF programs
-        bail!("eBPF backend not yet implemented (coming in v6.1+)")
-    }
-
-    /// Apply bandwidth limit to a process.
-    pub fn apply_limit(
-        &self,
-        _pid: u32,
-        _download: Option<u64>,
-        _upload: Option<u64>,
-    ) -> Result<()> {
-        bail!("eBPF apply_limit not yet implemented")
-    }
-
-    /// Remove bandwidth limit from a process.
-    pub fn remove_limit(&self, _pid: u32) -> Result<()> {
-        bail!("eBPF remove_limit not yet implemented")
     }
 }

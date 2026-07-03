@@ -10,8 +10,6 @@
 #[cfg(feature = "ebpf")]
 pub mod audit;
 #[cfg(feature = "ebpf")]
-pub mod events;
-#[cfg(feature = "ebpf")]
 pub mod identity;
 #[cfg(feature = "ebpf")]
 pub mod limiter;
