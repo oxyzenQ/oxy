@@ -26,3 +26,6 @@ codex/
 agent/
 other ai/
 zelynic/
+
+# object
+*.o
