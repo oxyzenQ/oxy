@@ -54,9 +54,9 @@ jobs:
           if [[ -d "/usr/include/$(uname -m)-linux-gnu" ]]; then
             ARCH_INCLUDE="-I/usr/include/$(uname -m)-linux-gnu"
           fi
-          clang -O2 -g -target bpf ${ARCH_INCLUDE} \
+          clang -O2 -g -target bpf "${ARCH_INCLUDE}" \
               -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
-          clang -O2 -g -target bpf ${ARCH_INCLUDE} \
+          clang -O2 -g -target bpf "${ARCH_INCLUDE}" \
               -c bpf/observer.bpf.c -o bpf/observer.bpf.o
           echo "=== BPF objects compiled ==="
           ls -lh bpf/*.bpf.o
