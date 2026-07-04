@@ -10,8 +10,22 @@
 | **CachyOS** (VM) | 7.1.2 | 17/17 ✅ | — | — | ✅ PASS |
 | **Ubuntu 26.04 LTS** | 7.0.0 | 17/17 ✅ | 13/13 ✅ | firefox 100kb → 650 Kbps, 10kb → 70 Kbps | ✅ PASS |
 | **Fedora 44** | 6.19.10 | 17/17 ✅ | 9/13 ⚠ | firefox 100kb → 690 Kbps, 10kb → 72 Kbps | ✅ PASS |
+| **Debian 13** (build only) | 5.10.134 | — | — | — | ⚙ Build-only |
 
 **Overall: 4/4 distros pass depth test. Real enforcement verified on all.**
+
+### Build Verification (Debian 13 sandbox)
+
+Kernel 5.10.134 (below 5.13 minimum) — runtime tests not possible.
+Build verification only:
+- ✅ `cargo build --features ebpf` → success
+- ✅ `cargo clippy --all-targets --all-features -- -D warnings` → 0 lints
+- ✅ `cargo fmt --check` → clean
+- ✅ `cargo test --features ebpf` → 41 passed
+- ✅ `cargo build --release --locked --features ebpf` → 1.7MB binary
+- ✅ `python3 scripts/check-policy.py` → PASS
+- ✅ `codespell` → clean
+- ✅ BPF syntax check (gcc stubs) → exit 0
 
 ## Test Details
 
