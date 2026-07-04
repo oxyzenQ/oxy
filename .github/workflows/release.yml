@@ -86,9 +86,19 @@ jobs:
           # Copy documentation
           cp README.md LICENSE "dist/${PKG_NAME}/"
 
-          # Copy install script (for end-user convenience)
+          # Copy install + uninstall scripts (for end-user convenience)
           cp scripts/install.sh "dist/${PKG_NAME}/install.sh"
-          chmod +x "dist/${PKG_NAME}/install.sh"
+          cp scripts/uninstall.sh "dist/${PKG_NAME}/uninstall.sh"
+          chmod +x "dist/${PKG_NAME}/install.sh" "dist/${PKG_NAME}/uninstall.sh"
+
+          # Copy test scripts (for VM/hardware testing)
+          mkdir -p "dist/${PKG_NAME}/scripts"
+          cp scripts/distros-depth-test.sh "dist/${PKG_NAME}/scripts/"
+          cp scripts/leak-test.sh "dist/${PKG_NAME}/scripts/"
+          cp scripts/stress-test.sh "dist/${PKG_NAME}/scripts/"
+          cp scripts/benchmark.sh "dist/${PKG_NAME}/scripts/"
+          cp scripts/long-endurance-test.sh "dist/${PKG_NAME}/scripts/"
+          chmod +x "dist/${PKG_NAME}/scripts/"*.sh
 
           # Generate man page
           "./dist/${PKG_NAME}/zelynic" man > "dist/${PKG_NAME}/man/zelynic.1" 2>/dev/null || true

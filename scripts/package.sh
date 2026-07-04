@@ -88,6 +88,16 @@ create_archive() {
     install -m644 README.md "$pkg_dir/"
     install -m644 LICENSE "$pkg_dir/"
 
+    # Copy install + uninstall scripts
+    install -m755 scripts/install.sh "$pkg_dir/"
+    install -m755 scripts/uninstall.sh "$pkg_dir/"
+
+    # Copy test scripts (for VM/hardware testing)
+    install -dm755 "$pkg_dir/scripts"
+    for script in distros-depth-test.sh leak-test.sh stress-test.sh benchmark.sh long-endurance-test.sh; do
+        [[ -f "scripts/$script" ]] && install -m755 "scripts/$script" "$pkg_dir/scripts/"
+    done
+
     # Generate man page
     log_info "Generating man page..."
     "$binary_path" man > "$pkg_dir/man/zelynic.1" 2>/dev/null || true
