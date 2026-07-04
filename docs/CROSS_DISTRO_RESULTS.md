@@ -7,14 +7,13 @@
 | Distro | Kernel | Binary | Depth Test | Leak Test | Real Enforcement | Status |
 |--------|--------|--------|-----------|-----------|-----------------|--------|
 | **Arch Linux** (CachyOS) | 6.18.35 | GNU | 17/17 ✅ | 13/13 ✅ | brave 100kb → 730 Kbps | ✅ PASS |
-| **CachyOS** (VM) | 7.1.2 | GNU | 17/17 ✅ | — | — | ✅ PASS |
-| **CachyOS** (VM, MUSL) | 7.1.2 | MUSL | 17/17 ✅ | 13/13 ✅ | chromium -d 10kb → 71 Kbps, -d 360kb → 3.0 Mbps | ✅ PASS |
+| **CachyOS** (VM) | 7.1.2 | MUSL | 17/17 ✅ | 13/13 ✅ | chromium -d 10kb → 71 Kbps, -d 360kb → 3.0 Mbps | ✅ PASS |
 | **Ubuntu 26.04 LTS** | 7.0.0 | GNU | 17/17 ✅ | 13/13 ✅ | firefox 100kb → 650 Kbps, 10kb → 70 Kbps | ✅ PASS |
 | **Fedora 44** | 6.19.10 | GNU | 17/17 ✅ | 13/13 ✅ | firefox 100kb → 690 Kbps, 10kb → 72 Kbps | ✅ PASS |
 | **Ubuntu 21.10** | **5.13.0** | **MUSL** | **17/17 ✅** | **13/13 ✅** | **GeckoMain 100kb → 770 Kbps, 10kb → 72 Kbps** | ✅ PASS |
 | **Debian 13** (build only) | 5.10.134 | — | — | — | — | ⚙ Build-only |
 
-**Overall: 6/6 distros pass depth test. Real enforcement verified on all. Minimum kernel 5.13 verified. Both GNU + MUSL binaries verified.**
+**Overall: 5/5 distros pass depth test. Real enforcement verified on all. Minimum kernel 5.13 verified. Both GNU + MUSL binaries verified.**
 
 ### Build Verification (Debian 13 sandbox)
 
@@ -39,14 +38,6 @@ Build verification only:
 - **Leak Test**: 13/13 PASS (zero orphans)
 - **Real Test**: brave 100kb → 730 Kbps (91% accuracy)
 - **Notes**: User's primary dev machine. Most extensive testing.
-
-### CachyOS (VM — kernel 7.1)
-- **Kernel**: 7.1.2-3-cachyos
-- **Arch**: x86_64 (KVM/QEMU, 4 vCPU)
-- **Memory**: 2.72 GB
-- **Depth Test**: 17/17 PASS
-- **Notes**: Bleeding edge kernel 7.1. No issues. BPF objects from release
-  tarball worked without recompilation.
 
 ### Ubuntu 26.04 LTS (VM)
 - **Kernel**: 7.0.0-14-generic
@@ -150,7 +141,7 @@ Slightly under target due to TCP backoff from dropped packets.
 
 BPF objects compiled on Arch Linux (kernel 6.18) successfully loaded on:
 - ✅ Arch Linux 6.18.35
-- ✅ CachyOS 7.1.2 (GNU + MUSL)
+- ✅ CachyOS 7.1.2 (MUSL)
 - ✅ Ubuntu 26.04 7.0.0
 - ✅ Fedora 44 6.19.10
 - ✅ Ubuntu 21.10 5.13.0 (minimum kernel)
