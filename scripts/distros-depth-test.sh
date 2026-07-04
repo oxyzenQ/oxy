@@ -11,7 +11,15 @@
 
 set -euo pipefail
 
-BINARY="${BINARY:-./target/release/zelynic}"
+# Auto-detect binary: installed > tarball > source build
+BINARY=""
+if command -v zelynic >/dev/null 2>&1; then
+    BINARY="zelynic"
+elif [[ -x "./zelynic" ]]; then
+    BINARY="./zelynic"
+elif [[ -x "./target/release/zelynic" ]]; then
+    BINARY="./target/release/zelynic"
+fi
 BPF_OBJ="bpf/limiter.bpf.o"
 PASS=0
 FAIL=0
@@ -50,9 +58,10 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if [[ ! -x "$BINARY" ]]; then
+if [[ -z "$BINARY" ]]; then
     echo "Building zelynic..."
     cargo build --release --features ebpf
+    BINARY="./target/release/zelynic"
 fi
 
 if [[ ! -f "$BPF_OBJ" ]]; then
