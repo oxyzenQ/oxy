@@ -29,7 +29,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl
 
       - name: Install BPF build dependencies
         run: |
@@ -64,63 +64,67 @@ jobs:
       - name: Build release binary (with eBPF feature)
         run: cargo build --release --target x86_64-unknown-linux-gnu --locked --features ebpf
 
-      - name: Verify binary has eBPF support
+      - name: Build static binary (musl, for old glibc systems)
+        run: cargo build --release --target x86_64-unknown-linux-musl --locked --features ebpf
+
+      - name: Verify binaries
         run: |
+          echo "=== GNU binary ==="
           ./target/x86_64-unknown-linux-gnu/release/zelynic -V
-          ./target/x86_64-unknown-linux-gnu/release/zelynic doctor || true
+          echo "=== MUSL binary ==="
+          ./target/x86_64-unknown-linux-musl/release/zelynic -V
+          echo "=== GNU ldd ==="
+          ldd ./target/x86_64-unknown-linux-gnu/release/zelynic || true
+          echo "=== MUSL ldd ==="
+          ldd ./target/x86_64-unknown-linux-musl/release/zelynic || true
 
       - name: Prepare release artifacts
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          PKG_NAME="zelynic-v${VERSION}-linux-amd64"
-          mkdir -p "dist/${PKG_NAME}/man" "dist/${PKG_NAME}/bpf"
 
-          # Copy binary
-          cp target/x86_64-unknown-linux-gnu/release/zelynic "dist/${PKG_NAME}/zelynic"
-          chmod +x "dist/${PKG_NAME}/zelynic"
+          # --- GNU (glibc) tarball ---
+          PKG_GNU="zelynic-v${VERSION}-linux-amd64"
+          mkdir -p "dist/${PKG_GNU}/man" "dist/${PKG_GNU}/bpf" "dist/${PKG_GNU}/scripts"
+          cp target/x86_64-unknown-linux-gnu/release/zelynic "dist/${PKG_GNU}/zelynic"
+          chmod +x "dist/${PKG_GNU}/zelynic"
+          cp bpf/limiter.bpf.o  "dist/${PKG_GNU}/bpf/"
+          cp bpf/observer.bpf.o "dist/${PKG_GNU}/bpf/"
+          cp README.md LICENSE "dist/${PKG_GNU}/"
+          cp scripts/install.sh scripts/uninstall.sh "dist/${PKG_GNU}/"
+          chmod +x "dist/${PKG_GNU}/install.sh" "dist/${PKG_GNU}/uninstall.sh"
+          cp scripts/distros-depth-test.sh scripts/leak-test.sh \
+             scripts/stress-test.sh scripts/benchmark.sh \
+             scripts/long-endurance-test.sh "dist/${PKG_GNU}/scripts/"
+          chmod +x "dist/${PKG_GNU}/scripts/"*.sh
+          "./dist/${PKG_GNU}/zelynic" man > "dist/${PKG_GNU}/man/zelynic.1" 2>/dev/null || true
+          [ -f "dist/${PKG_GNU}/man/zelynic.1" ] && gzip -f "dist/${PKG_GNU}/man/zelynic.1"
+          cd dist && tar -czf "${PKG_GNU}.tar.gz" "${PKG_GNU}"
+          sha512sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.sha512sum"
+          rm -rf "${PKG_GNU}" && cd ..
 
-          # Copy pre-compiled BPF objects (users don't need clang)
-          cp bpf/limiter.bpf.o  "dist/${PKG_NAME}/bpf/"
-          cp bpf/observer.bpf.o "dist/${PKG_NAME}/bpf/"
-
-          # Copy documentation
-          cp README.md LICENSE "dist/${PKG_NAME}/"
-
-          # Copy install + uninstall scripts (for end-user convenience)
-          cp scripts/install.sh "dist/${PKG_NAME}/install.sh"
-          cp scripts/uninstall.sh "dist/${PKG_NAME}/uninstall.sh"
-          chmod +x "dist/${PKG_NAME}/install.sh" "dist/${PKG_NAME}/uninstall.sh"
-
-          # Copy test scripts (for VM/hardware testing)
-          mkdir -p "dist/${PKG_NAME}/scripts"
-          cp scripts/distros-depth-test.sh "dist/${PKG_NAME}/scripts/"
-          cp scripts/leak-test.sh "dist/${PKG_NAME}/scripts/"
-          cp scripts/stress-test.sh "dist/${PKG_NAME}/scripts/"
-          cp scripts/benchmark.sh "dist/${PKG_NAME}/scripts/"
-          cp scripts/long-endurance-test.sh "dist/${PKG_NAME}/scripts/"
-          chmod +x "dist/${PKG_NAME}/scripts/"*.sh
-
-          # Generate man page
-          "./dist/${PKG_NAME}/zelynic" man > "dist/${PKG_NAME}/man/zelynic.1" 2>/dev/null || true
-          if [ -f "dist/${PKG_NAME}/man/zelynic.1" ]; then
-            gzip -f "dist/${PKG_NAME}/man/zelynic.1"
-          fi
-
-          # Create tar.gz archive
-          cd dist
-          tar -czf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
-
-          # Generate SHA512 checksum
-          sha512sum "${PKG_NAME}.tar.gz" > "${PKG_NAME}.tar.gz.sha512sum"
-
-          echo "PKG_NAME=${PKG_NAME}" >> "$GITHUB_ENV"
-
-          # Cleanup extracted directory
-          rm -rf "${PKG_NAME}"
+          # --- MUSL (static, for old glibc) tarball ---
+          PKG_MUSL="zelynic-v${VERSION}-linux-amd64-musl"
+          mkdir -p "dist/${PKG_MUSL}/man" "dist/${PKG_MUSL}/bpf" "dist/${PKG_MUSL}/scripts"
+          cp target/x86_64-unknown-linux-musl/release/zelynic "dist/${PKG_MUSL}/zelynic"
+          chmod +x "dist/${PKG_MUSL}/zelynic"
+          cp bpf/limiter.bpf.o  "dist/${PKG_MUSL}/bpf/"
+          cp bpf/observer.bpf.o "dist/${PKG_MUSL}/bpf/"
+          cp README.md LICENSE "dist/${PKG_MUSL}/"
+          cp scripts/install.sh scripts/uninstall.sh "dist/${PKG_MUSL}/"
+          chmod +x "dist/${PKG_MUSL}/install.sh" "dist/${PKG_MUSL}/uninstall.sh"
+          cp scripts/distros-depth-test.sh scripts/leak-test.sh \
+             scripts/stress-test.sh scripts/benchmark.sh \
+             scripts/long-endurance-test.sh "dist/${PKG_MUSL}/scripts/"
+          chmod +x "dist/${PKG_MUSL}/scripts/"*.sh
+          "./dist/${PKG_MUSL}/zelynic" man > "dist/${PKG_MUSL}/man/zelynic.1" 2>/dev/null || true
+          [ -f "dist/${PKG_MUSL}/man/zelynic.1" ] && gzip -f "dist/${PKG_MUSL}/man/zelynic.1"
+          cd dist && tar -czf "${PKG_MUSL}.tar.gz" "${PKG_MUSL}"
+          sha512sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.sha512sum"
+          rm -rf "${PKG_MUSL}" && cd ..
 
           echo ""
           echo "=== Release artifacts ==="
-          ls -lh
+          ls -lh dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
