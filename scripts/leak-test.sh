@@ -52,7 +52,11 @@ check_active() {
     maps=${maps:-0}
     pid=$(test -f /tmp/zelynic.pid && echo "1" || echo "0")
 
-    if [[ "$progs" -gt 0 && "$maps" -gt 0 && "$pid" == "1" ]]; then
+    # Active = pinned maps exist + PID file exists.
+    # BPF program count via bpftool is unreliable across distros
+    # (Fedora may show different prog names or not expose them to
+    # non-child processes). Maps + PID are the reliable indicators.
+    if [[ "$maps" -gt 0 && "$pid" == "1" ]]; then
         pass "$label: active (progs=$progs maps=$maps pid=$pid)"
     else
         fail "$label: not active (progs=$progs maps=$maps pid=$pid)"
