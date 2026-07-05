@@ -163,7 +163,7 @@ See [docs/WOLF_ARCHITECTURE.md](docs/WOLF_ARCHITECTURE.md) for full design.
 - [Stress Test](scripts/stress-test.sh) — long-running enforcement test
 - [Benchmark](scripts/benchmark.sh) — CPU/memory overhead measurement
 
-## Verification
+## Test Results
 
 Real test results (Arch Linux, kernel 6.18, AMD Ryzen 7 5800HS):
 
@@ -174,6 +174,24 @@ Real test results (Arch Linux, kernel 6.18, AMD Ryzen 7 5800HS):
 | aria2c | 500→100→10→2kb | Override each time | — | ✅ Override works |
 
 CPU/memory: negligible (serve child < 1% CPU, < 10 MB RAM).
+
+## Release Verification
+
+Each release ships **three** checksums: classical SHA-512 + quantum-resistant
+BLAKE2b-512 + SHAKE256. Full instructions in
+[docs/VERIFY_RELEASE.md](docs/VERIFY_RELEASE.md).
+
+```bash
+# Classical (universal)
+sha512sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.sha512sum
+
+# Quantum-resistant — BLAKE2b (fastest, in coreutils)
+b2sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.b2sum
+
+# Quantum-resistant — SHAKE256 (NIST PQ standard, via openssl)
+openssl dgst -shake256 zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz
+# Compare hash with: cat zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.shake256
+```
 
 ## License
 
