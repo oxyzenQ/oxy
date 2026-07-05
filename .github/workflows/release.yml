@@ -62,10 +62,10 @@ jobs:
           ls -lh bpf/*.bpf.o
 
       - name: Build release binary (with eBPF feature)
-        run: cargo build --release --target x86_64-unknown-linux-gnu --locked --features ebpf
+        run: cargo build --release --target x86_64-unknown-linux-gnu --features ebpf
 
       - name: Build static binary (musl, for old glibc systems)
-        run: cargo build --release --target x86_64-unknown-linux-musl --locked --features ebpf
+        run: cargo build --release --target x86_64-unknown-linux-musl --features ebpf
 
       - name: Verify binaries
         run: |
