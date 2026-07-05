@@ -102,8 +102,8 @@ jobs:
           # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.sha512sum"
           b2sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.b2sum"
-          HASH=$(openssl dgst -shake256 "${PKG_GNU}.tar.gz" | awk -F'= ' '{print $2}')
-          echo "${HASH}  ${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.shake256"
+          # SHAKE256 via Python (cross-platform, consistent 64-byte output)
+          python3 -c "import hashlib; h=hashlib.shake_256(open('${PKG_GNU}.tar.gz','rb').read()).hexdigest(64); print(f'{h}  ${PKG_GNU}.tar.gz')" > "${PKG_GNU}.tar.gz.shake256"
           rm -rf "${PKG_GNU}" && cd ..
 
           # --- MUSL (static, for old glibc) tarball ---
@@ -126,8 +126,8 @@ jobs:
           # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.sha512sum"
           b2sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.b2sum"
-          HASH=$(openssl dgst -shake256 "${PKG_MUSL}.tar.gz" | awk -F'= ' '{print $2}')
-          echo "${HASH}  ${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.shake256"
+          # SHAKE256 via Python (cross-platform, consistent 64-byte output)
+          python3 -c "import hashlib; h=hashlib.shake_256(open('${PKG_MUSL}.tar.gz','rb').read()).hexdigest(64); print(f'{h}  ${PKG_MUSL}.tar.gz')" > "${PKG_MUSL}.tar.gz.shake256"
           rm -rf "${PKG_MUSL}" && cd ..
 
           echo ""

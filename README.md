@@ -188,9 +188,9 @@ sha512sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.sha512sum
 # Quantum-resistant — BLAKE2b (fastest, in coreutils)
 b2sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.b2sum
 
-# Quantum-resistant — SHAKE256 (NIST PQ standard, via openssl)
-# openssl has no -c flag, so we wrap it for auto-verify:
-COMPUTED=$(openssl dgst -shake256 zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz | awk '{print $NF}')
+# Quantum-resistant — SHAKE256 (NIST PQ standard, via Python)
+# openssl's -shake256 default output length varies; Python is consistent
+COMPUTED=$(python3 -c "import hashlib; print(hashlib.shake_256(open('zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz','rb').read()).hexdigest(64))")
 EXPECTED=$(awk '{print $1}' zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.shake256)
 [ "$COMPUTED" = "$EXPECTED" ] && echo "OK" || echo "FAILED"
 ```
