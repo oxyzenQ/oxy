@@ -11,7 +11,9 @@
 #
 # Usage:
 #   ./install.sh --user     → install to ~/.local/bin (default)
-#   ./install.sh --system   → install to /usr/bin (requires sudo)
+#   ./install.sh --system   → install to /usr/bin (script uses sudo internally)
+#
+# Run WITHOUT sudo: the script escalates via sudo ONLY for --system install steps.
 
 set -euo pipefail
 
@@ -26,7 +28,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: $0 [--system|--user]"
             echo "  --user    Install to ~/.local/bin (default)"
-            echo "  --system  Install to /usr/bin (requires sudo)"
+            echo "  --system  Install to /usr/bin (script uses sudo internally)"
             exit 0
             ;;
         *)
@@ -44,6 +46,18 @@ BPF_DIR="${SCRIPT_DIR}/bpf"
 
 if [[ ! -f "${BINARY}" ]]; then
     # Source mode — need to build
+
+    # Refuse to run as root — cargo build must run as the current user.
+    # If run with sudo, cargo build would create root-owned files in target/,
+    # breaking future `cargo clean` / `cargo build` for the normal user.
+    if [[ $EUID -eq 0 ]]; then
+        echo "error: do not run this script with sudo (source build mode)." >&2
+        echo "  cargo build would run as root, corrupting target/ ownership." >&2
+        echo "  Run: $0 --system" >&2
+        echo "  The script will use sudo internally only for the install step." >&2
+        exit 1
+    fi
+
     if [[ -f "${SCRIPT_DIR}/Cargo.toml" ]]; then
         REPO_ROOT="${SCRIPT_DIR}"
     elif [[ -f "${SCRIPT_DIR}/../Cargo.toml" ]]; then
@@ -100,24 +114,17 @@ if [[ ! -f "${BPF_DIR}/limiter.bpf.o" ]] || [[ ! -f "${BPF_DIR}/observer.bpf.o" 
     exit 1
 fi
 
-# Install
+# Install — sudo used ONLY for --system mode install steps.
 if [[ "${INSTALL_MODE}" == "--system" ]]; then
-    if [[ $EUID -ne 0 ]]; then
-        echo "System install requires root. Run with sudo."
-        echo "  sudo ./install.sh --system"
-        exit 1
-    fi
-    # Install binary
-    install -Dm755 "${BINARY}" "/usr/bin/${PROJECT_NAME}"
-    # Install BPF objects
-    install -d /usr/lib/zelynic
-    install -Dm644 "${BPF_DIR}/limiter.bpf.o" "/usr/lib/zelynic/limiter.bpf.o"
-    install -Dm644 "${BPF_DIR}/observer.bpf.o" "/usr/lib/zelynic/observer.bpf.o"
+    sudo install -Dm755 "${BINARY}" "/usr/bin/${PROJECT_NAME}"
+    sudo install -d /usr/lib/zelynic
+    sudo install -Dm644 "${BPF_DIR}/limiter.bpf.o" "/usr/lib/zelynic/limiter.bpf.o"
+    sudo install -Dm644 "${BPF_DIR}/observer.bpf.o" "/usr/lib/zelynic/observer.bpf.o"
     echo "${PROJECT_NAME} installed to /usr/bin/${PROJECT_NAME}"
     echo "BPF objects installed to /usr/lib/zelynic/"
     echo "Run: ${PROJECT_NAME} doctor  (to verify eBPF support)"
 else
-    # User install
+    # User install — no sudo
     BINDIR="${HOME}/.local/bin"
     BPF_INSTALL_DIR="${HOME}/.local/lib/zelynic"
     mkdir -p "${BINDIR}" "${BPF_INSTALL_DIR}"
