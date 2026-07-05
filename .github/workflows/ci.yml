@@ -9,34 +9,8 @@ name: CI
 on:
   push:
     branches: [main, wolf-architecture]
-    paths:
-      - '**/*.rs'
-      - '**/*.toml'
-      - '**/*.sh'
-      - '**/*.py'
-      - '**/*.c'
-      - 'Cargo.lock'
-      - 'build.rs'
-      - 'rust-toolchain*'
-      - 'deny.toml'
-      - '.cargo/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
   pull_request:
     branches: [main, wolf-architecture]
-    paths:
-      - '**/*.rs'
-      - '**/*.toml'
-      - '**/*.sh'
-      - '**/*.py'
-      - '**/*.c'
-      - 'Cargo.lock'
-      - 'build.rs'
-      - 'rust-toolchain*'
-      - 'deny.toml'
-      - '.cargo/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -44,7 +18,35 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.detect.outputs.core }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect core file changes
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE=$(git rev-parse HEAD~1 2>/dev/null || git rev-list --max-parents=0 HEAD)
+            HEAD="${{ github.sha }}"
+          fi
+          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git ls-files)
+          CORE_PATTERN='\.(rs|toml|c|py)$|Cargo\.lock$|^build\.rs$|^rust-toolchain|^scripts/|^\.cargo/|^bpf/'
+          if echo "$FILES" | grep -qE "$CORE_PATTERN"; then
+            echo "core=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "core=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     name: Lint & Test
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +90,8 @@ jobs:
         run: cargo build --release --locked
 
   ebpf-build:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     name: eBPF Build (${{ matrix.os }})
     strategy:
       fail-fast: false
