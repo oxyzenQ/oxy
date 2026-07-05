@@ -14,6 +14,9 @@ trusting a downloaded binary.
 
 ## How to verify
 
+All three commands print `<filename>: OK` on success (or `FAILED` on
+mismatch). No manual hash comparison needed.
+
 ```bash
 # Classical (universal, every Linux has this)
 sha512sum -c project-vX.Y.Z-linux-amd64-gnu.tar.gz.sha512sum
@@ -22,8 +25,10 @@ sha512sum -c project-vX.Y.Z-linux-amd64-gnu.tar.gz.sha512sum
 b2sum -c project-vX.Y.Z-linux-amd64-gnu.tar.gz.b2sum
 
 # Quantum-resistant — SHAKE256 (NIST PQ standard, via openssl)
-openssl dgst -shake256 project-vX.Y.Z-linux-amd64-gnu.tar.gz
-# Compare hash with: cat project-vX.Y.Z-linux-amd64-gnu.tar.gz.shake256
+# openssl has no -c flag, so we wrap it in a one-liner that auto-verifies
+COMPUTED=$(openssl dgst -shake256 project-vX.Y.Z-linux-amd64-gnu.tar.gz | awk '{print $NF}')
+EXPECTED=$(awk '{print $1}' project-vX.Y.Z-linux-amd64-gnu.tar.gz.shake256)
+[ "$COMPUTED" = "$EXPECTED" ] && echo "project-vX.Y.Z-linux-amd64-gnu.tar.gz: OK" || echo "FAILED"
 ```
 
 Replace `project-vX.Y.Z-linux-amd64-gnu` with the actual archive name
