@@ -8,11 +8,30 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[allow(dead_code)]
 pub const NAME: &str = "zelynic";
 pub fn build_target() -> &'static str {
-    // Map Rust's internal arch name to the project's user-facing label.
-    // `x86_64` -> `amd64`; all others pass through unchanged.
-    match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        other => other,
+    // Dynamic build target label: detects arch + libc env at compile time.
+    // Returns e.g. "amd64-gnu" (glibc, dynamic) or "amd64-musl" (static)
+    // for x86_64 Linux builds. Other arches pass through with env suffix.
+    if cfg!(target_env = "musl") {
+        if cfg!(target_arch = "x86_64") {
+            "amd64-musl"
+        } else if cfg!(target_arch = "aarch64") {
+            "aarch64-musl"
+        } else {
+            std::env::consts::ARCH
+        }
+    } else if cfg!(target_env = "gnu") {
+        if cfg!(target_arch = "x86_64") {
+            "amd64-gnu"
+        } else if cfg!(target_arch = "aarch64") {
+            "aarch64-gnu"
+        } else {
+            std::env::consts::ARCH
+        }
+    } else {
+        match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            other => other,
+        }
     }
 }
 pub const COPYRIGHT: &str = "(c) 2026 rezky_nightky (oxyzenQ)";
