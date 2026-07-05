@@ -104,10 +104,10 @@ jobs:
           b2sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.b2sum"
           # SHAKE256 via Python (cross-platform, consistent 64-byte output)
           python3 -c "
-            import hashlib
-            data = open('${PKG_GNU}.tar.gz', 'rb').read()
-            h = hashlib.shake_256(data).hexdigest(64)
-            print(f'{h}  ${PKG_GNU}.tar.gz')
+          import hashlib
+          data = open('${PKG_GNU}.tar.gz', 'rb').read()
+          h = hashlib.shake_256(data).hexdigest(64)
+          print(f'{h}  ${PKG_GNU}.tar.gz')
           " > "${PKG_GNU}.tar.gz.shake256"
           rm -rf "${PKG_GNU}" && cd ..
 
@@ -133,10 +133,10 @@ jobs:
           b2sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.b2sum"
           # SHAKE256 via Python (cross-platform, consistent 64-byte output)
           python3 -c "
-            import hashlib
-            data = open('${PKG_MUSL}.tar.gz', 'rb').read()
-            h = hashlib.shake_256(data).hexdigest(64)
-            print(f'{h}  ${PKG_MUSL}.tar.gz')
+          import hashlib
+          data = open('${PKG_MUSL}.tar.gz', 'rb').read()
+          h = hashlib.shake_256(data).hexdigest(64)
+          print(f'{h}  ${PKG_MUSL}.tar.gz')
           " > "${PKG_MUSL}.tar.gz.shake256"
           rm -rf "${PKG_MUSL}" && cd ..
 
