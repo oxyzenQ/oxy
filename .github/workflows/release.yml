@@ -99,7 +99,11 @@ jobs:
           "./dist/${PKG_GNU}/zelynic" man > "dist/${PKG_GNU}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_GNU}/man/zelynic.1" ] && gzip -f "dist/${PKG_GNU}/man/zelynic.1"
           cd dist && tar -czf "${PKG_GNU}.tar.gz" "${PKG_GNU}"
+          # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.sha512sum"
+          b2sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.b2sum"
+          HASH=$(openssl dgst -shake256 "${PKG_GNU}.tar.gz" | awk -F'= ' '{print $2}')
+          echo "${HASH}  ${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.shake256"
           rm -rf "${PKG_GNU}" && cd ..
 
           # --- MUSL (static, for old glibc) tarball ---
@@ -119,7 +123,11 @@ jobs:
           "./dist/${PKG_MUSL}/zelynic" man > "dist/${PKG_MUSL}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_MUSL}/man/zelynic.1" ] && gzip -f "dist/${PKG_MUSL}/man/zelynic.1"
           cd dist && tar -czf "${PKG_MUSL}.tar.gz" "${PKG_MUSL}"
+          # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.sha512sum"
+          b2sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.b2sum"
+          HASH=$(openssl dgst -shake256 "${PKG_MUSL}.tar.gz" | awk -F'= ' '{print $2}')
+          echo "${HASH}  ${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.shake256"
           rm -rf "${PKG_MUSL}" && cd ..
 
           echo ""
@@ -156,6 +164,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: dist/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
