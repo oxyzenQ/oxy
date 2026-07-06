@@ -83,7 +83,7 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
 
           # --- GNU (glibc) tarball ---
-          PKG_GNU="zelynic-v${VERSION}-linux-amd64"
+          PKG_GNU="zelynic-v${VERSION}-linux-amd64-gnu"
           mkdir -p "dist/${PKG_GNU}/man" "dist/${PKG_GNU}/bpf" "dist/${PKG_GNU}/scripts"
           cp target/x86_64-unknown-linux-gnu/release/zelynic "dist/${PKG_GNU}/zelynic"
           chmod +x "dist/${PKG_GNU}/zelynic"
