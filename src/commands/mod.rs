@@ -263,7 +263,19 @@ fn spawn_serve_child(verbose: bool) -> Result<()> {
         eprintln!("[limiter] Serve child spawned (PID {pid})");
     }
 
+    // Clean up stale pin files before spawning child.
+    // Previous crash may have left stale files → child pin fails with EEXIST.
+    for path in &[
+        PIN_MAP_POLICY_DL,
+        PIN_MAP_POLICY_UL,
+        PIN_MAP_WATCHDOG,
+        PIN_MAP_STATS,
+    ] {
+        let _ = std::fs::remove_file(path);
+    }
+
     // Wait for maps to be pinned (child needs time to load BPF + pin).
+    // Track the old state so we don't mistake stale files for new ones.
     for _ in 0..50 {
         // 50 × 100ms = 5s timeout
         if std::path::Path::new(PIN_MAP_POLICY_DL).exists() {
@@ -391,8 +403,21 @@ fn handle_serve(cli: &Cli) -> Result<()> {
 }
 
 /// Pin BPF maps to /sys/fs/bpf/zelynic/ for parent access.
+/// Cleans up stale pin files first to prevent "File exists" errors.
 #[cfg(feature = "ebpf")]
 fn pin_maps(limiter: &crate::ebpf::limiter::Limiter) -> Result<()> {
+    // Remove stale pin files from previous runs.
+    // If previous zelynic crashed without cleanup, these files persist
+    // and BPF_OBJ_PIN fails with EEXIST.
+    for path in &[
+        PIN_MAP_POLICY_DL,
+        PIN_MAP_POLICY_UL,
+        PIN_MAP_WATCHDOG,
+        PIN_MAP_STATS,
+    ] {
+        let _ = std::fs::remove_file(path);
+    }
+
     limiter.pin_map("cgroup_policy_dl", PIN_MAP_POLICY_DL)?;
     limiter.pin_map("cgroup_policy_ul", PIN_MAP_POLICY_UL)?;
     limiter.pin_map("watchdog_deadline", PIN_MAP_WATCHDOG)?;
