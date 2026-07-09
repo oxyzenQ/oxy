@@ -12,13 +12,21 @@ pub fn build_target() -> &'static str {
     // Returns e.g. "amd64-gnu" (glibc, dynamic) or "amd64-musl" (static)
     // for x86_64 Linux builds. Other arches pass through with env suffix.
     if cfg!(target_env = "musl") {
-        if cfg!(target_arch = "x86_64") { "amd64-musl" }
-        else if cfg!(target_arch = "aarch64") { "aarch64-musl" }
-        else { std::env::consts::ARCH }
+        if cfg!(target_arch = "x86_64") {
+            "amd64-musl"
+        } else if cfg!(target_arch = "aarch64") {
+            "aarch64-musl"
+        } else {
+            std::env::consts::ARCH
+        }
     } else if cfg!(target_env = "gnu") {
-        if cfg!(target_arch = "x86_64") { "amd64-gnu" }
-        else if cfg!(target_arch = "aarch64") { "aarch64-gnu" }
-        else { std::env::consts::ARCH }
+        if cfg!(target_arch = "x86_64") {
+            "amd64-gnu"
+        } else if cfg!(target_arch = "aarch64") {
+            "aarch64-gnu"
+        } else {
+            std::env::consts::ARCH
+        }
     } else {
         match std::env::consts::ARCH {
             "x86_64" => "amd64",

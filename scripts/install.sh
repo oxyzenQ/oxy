@@ -12,6 +12,8 @@
 # Usage:
 #   ./install.sh --user     → install to ~/.local/bin (default)
 #   ./install.sh --system   → install to /usr/bin (script uses sudo internally)
+#
+# Run WITHOUT sudo: the script escalates via sudo ONLY for --system install steps.
 
 set -euo pipefail
 
@@ -44,9 +46,10 @@ BPF_DIR="${SCRIPT_DIR}/bpf"
 
 if [[ ! -f "${BINARY}" ]]; then
     # Source mode — need to build
+
     # Refuse to run as root — cargo build must run as the current user.
     # If run with sudo, cargo build would create root-owned files in target/,
-    # breaking future cargo clean/build for the normal user.
+    # breaking future `cargo clean` / `cargo build` for the normal user.
     if [[ $EUID -eq 0 ]]; then
         echo "error: do not run this script with sudo (source build mode)." >&2
         echo "  cargo build would run as root, corrupting target/ ownership." >&2
@@ -54,6 +57,7 @@ if [[ ! -f "${BINARY}" ]]; then
         echo "  The script will use sudo internally only for the install step." >&2
         exit 1
     fi
+
     if [[ -f "${SCRIPT_DIR}/Cargo.toml" ]]; then
         REPO_ROOT="${SCRIPT_DIR}"
     elif [[ -f "${SCRIPT_DIR}/../Cargo.toml" ]]; then
@@ -120,7 +124,7 @@ if [[ "${INSTALL_MODE}" == "--system" ]]; then
     echo "BPF objects installed to /usr/lib/zelynic/"
     echo "Run: ${PROJECT_NAME} doctor  (to verify eBPF support)"
 else
-    # User install
+    # User install — no sudo
     BINDIR="${HOME}/.local/bin"
     BPF_INSTALL_DIR="${HOME}/.local/lib/zelynic"
     mkdir -p "${BINDIR}" "${BPF_INSTALL_DIR}"

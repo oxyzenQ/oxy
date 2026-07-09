@@ -62,10 +62,10 @@ jobs:
           ls -lh bpf/*.bpf.o
 
       - name: Build release binary (with eBPF feature)
-        run: cargo build --release --target x86_64-unknown-linux-gnu --locked --features ebpf
+        run: cargo build --release --target x86_64-unknown-linux-gnu --features ebpf
 
       - name: Build static binary (musl, for old glibc systems)
-        run: cargo build --release --target x86_64-unknown-linux-musl --locked --features ebpf
+        run: cargo build --release --target x86_64-unknown-linux-musl --features ebpf
 
       - name: Verify binaries
         run: |
@@ -83,7 +83,7 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
 
           # --- GNU (glibc) tarball ---
-          PKG_GNU="zelynic-v${VERSION}-linux-amd64"
+          PKG_GNU="zelynic-v${VERSION}-linux-amd64-gnu"
           mkdir -p "dist/${PKG_GNU}/man" "dist/${PKG_GNU}/bpf" "dist/${PKG_GNU}/scripts"
           cp target/x86_64-unknown-linux-gnu/release/zelynic "dist/${PKG_GNU}/zelynic"
           chmod +x "dist/${PKG_GNU}/zelynic"
@@ -99,7 +99,16 @@ jobs:
           "./dist/${PKG_GNU}/zelynic" man > "dist/${PKG_GNU}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_GNU}/man/zelynic.1" ] && gzip -f "dist/${PKG_GNU}/man/zelynic.1"
           cd dist && tar -czf "${PKG_GNU}.tar.gz" "${PKG_GNU}"
+          # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.sha512sum"
+          b2sum "${PKG_GNU}.tar.gz" > "${PKG_GNU}.tar.gz.b2sum"
+          # SHAKE256 via Python (cross-platform, consistent 64-byte output)
+          python3 -c "
+          import hashlib
+          data = open('${PKG_GNU}.tar.gz', 'rb').read()
+          h = hashlib.shake_256(data).hexdigest(64)
+          print(f'{h}  ${PKG_GNU}.tar.gz')
+          " > "${PKG_GNU}.tar.gz.shake256"
           rm -rf "${PKG_GNU}" && cd ..
 
           # --- MUSL (static, for old glibc) tarball ---
@@ -119,7 +128,16 @@ jobs:
           "./dist/${PKG_MUSL}/zelynic" man > "dist/${PKG_MUSL}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_MUSL}/man/zelynic.1" ] && gzip -f "dist/${PKG_MUSL}/man/zelynic.1"
           cd dist && tar -czf "${PKG_MUSL}.tar.gz" "${PKG_MUSL}"
+          # Checksums: SHA-512 (classical) + BLAKE2b-512 + SHAKE256 (quantum-resistant)
           sha512sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.sha512sum"
+          b2sum "${PKG_MUSL}.tar.gz" > "${PKG_MUSL}.tar.gz.b2sum"
+          # SHAKE256 via Python (cross-platform, consistent 64-byte output)
+          python3 -c "
+          import hashlib
+          data = open('${PKG_MUSL}.tar.gz', 'rb').read()
+          h = hashlib.shake_256(data).hexdigest(64)
+          print(f'{h}  ${PKG_MUSL}.tar.gz')
+          " > "${PKG_MUSL}.tar.gz.shake256"
           rm -rf "${PKG_MUSL}" && cd ..
 
           echo ""
@@ -153,9 +171,26 @@ jobs:
           name: release-artifacts
           path: dist
 
+      - name: Generate release body
+        run: |
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)
+          {
+            if [ -n "$PREV_TAG" ]; then
+              echo "## What's Changed"
+              echo ""
+              git log --no-merges --pretty=format:'- %s (%h)' "${PREV_TAG}..${GITHUB_REF_NAME}"
+              echo ""
+            else
+              echo "Initial release."
+            fi
+          } > release-body.md
+          echo "=== Release body ==="
+          cat release-body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-body.md
           files: dist/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
