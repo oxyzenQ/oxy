@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 rezky_nightky
+#
+# Minimal clang-format config for BPF C code.
+# Based on LLVM style with BPF-specific adjustments.
+
+BasedOnStyle: LLVM
+Language: C
+ColumnLimit: 80
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: false
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: false
+AllowShortBlocksOnASingleLine: false
+SortIncludes: true
+IncludeBlocks: Regroup

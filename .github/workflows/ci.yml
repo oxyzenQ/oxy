@@ -106,6 +106,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang libbpf-dev linux-libc-dev
 
+      - name: Check BPF C formatting (clang-format)
+        run: |
+          clang-format --dry-run --Werror bpf/*.c
+
       - name: Compile BPF observer
         run: |
           ARCH="$(uname -m)"
