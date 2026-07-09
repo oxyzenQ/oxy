@@ -45,6 +45,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             upload,
             watchdog,
             allow_dangerous,
+            force,
             duration,
         }) => {
             #[cfg(feature = "ebpf")]
@@ -56,6 +57,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     upload.as_deref(),
                     watchdog,
                     allow_dangerous,
+                    force,
                     duration,
                     cli.verbose,
                 )
@@ -69,6 +71,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     upload,
                     watchdog,
                     allow_dangerous,
+                    force,
                     duration,
                     cli.verbose,
                 );
@@ -84,6 +87,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             upload,
             watchdog,
             allow_dangerous,
+            force,
             duration,
         }) => {
             #[cfg(feature = "ebpf")]
@@ -95,6 +99,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     upload.as_deref(),
                     watchdog,
                     allow_dangerous,
+                    force,
                     duration,
                     cli.verbose,
                 )
@@ -108,7 +113,44 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     upload,
                     watchdog,
                     allow_dangerous,
+                    force,
                     duration,
+                    cli.verbose,
+                );
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::AllLimit {
+            rate,
+            download,
+            upload,
+            watchdog,
+            allow_dangerous,
+            force,
+        }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_all_limit(
+                    rate.as_deref(),
+                    download.as_deref(),
+                    upload.as_deref(),
+                    watchdog,
+                    allow_dangerous,
+                    force,
+                    cli.verbose,
+                )
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (
+                    rate,
+                    download,
+                    upload,
+                    watchdog,
+                    allow_dangerous,
+                    force,
                     cli.verbose,
                 );
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
@@ -459,6 +501,102 @@ fn kill_serve_child() -> Result<()> {
     Ok(())
 }
 
+/// List of dangerous/system process names that should not be limited
+/// without --force flag. Limiting these can destabilize the system.
+#[cfg(feature = "ebpf")]
+const DANGEROUS_TARGETS: &[&str] = &[
+    "root",
+    "init",
+    "kthreadd",
+    "systemd",
+    "systemd-journal",
+    "systemd-logind",
+    "systemd-udevd",
+    "systemd-resolve",
+    "systemd-timesyn",
+    "systemd-hostnam",
+    "systemd-machine",
+    "systemd-oomd",
+    "dbus-daemon",
+    "dbus-broker",
+    "polkitd",
+    "rtkit-daemon",
+    "wpa_supplicant",
+    "NetworkManager",
+    "gdm",
+    "gdm3",
+    "sddm",
+    "sddm-helper",
+    "lightdm",
+    "sshd",
+    "agetty",
+    "login",
+    "kerneloops",
+    "irqbalance",
+    "chronyd",
+    "snapd",
+    "udisksd",
+    "upowerd",
+    "accounts-daemon",
+    "colord",
+    "fwupd",
+    "ModemManager",
+    "avahi-daemon",
+    "cupsd",
+    "cups-browsed",
+    "rsyslogd",
+    "cron",
+    "atd",
+    "acpid",
+    "bluetoothd",
+    "bluez",
+    "pipewire",
+    "pipewire-pulse",
+    "wireplumber",
+    "pulseaudio",
+    "gnome-shell",
+    "gnome-session",
+    "kwin_wayland",
+    "kwin_x11",
+    "Xorg",
+    "Xwayland",
+    "ksmserver",
+    "plasmashell",
+];
+
+/// Check if a target name is dangerous (system process).
+#[cfg(feature = "ebpf")]
+fn is_dangerous_target(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    DANGEROUS_TARGETS
+        .iter()
+        .any(|d| d.to_lowercase() == name_lower)
+}
+
+/// Validate target against dangerous list. Returns Ok if safe, Err if dangerous.
+#[cfg(feature = "ebpf")]
+fn check_dangerous_target(target_str: &str, force: bool) -> Result<()> {
+    // Numeric cgroup IDs are always allowed (user knows what they're doing).
+    if target_str.parse::<u32>().is_ok() {
+        return Ok(());
+    }
+
+    if is_dangerous_target(target_str) {
+        if force {
+            eprintln!("WARNING: '{target_str}' is a system process. Forcing with --force.");
+            eprintln!("  This may destabilize your system. Use 'zelynic unstrict {target_str}' to remove.");
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "'{target_str}' is a system process. Limiting it may destabilize your system.\n\
+                 If you really want to do this, use: zelynic strict-single {target_str} 100kb --force"
+            ))
+        }
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(feature = "ebpf")]
 #[allow(clippy::too_many_arguments)]
 fn handle_strict_single(
@@ -468,6 +606,7 @@ fn handle_strict_single(
     upload: Option<&str>,
     _watchdog: u64,
     allow_dangerous: bool,
+    force: bool,
     _duration: u64,
     verbose: bool,
 ) -> Result<()> {
@@ -477,6 +616,8 @@ fn handle_strict_single(
         eprintln!("zelynic requires root. Run with sudo.");
         return Err(anyhow::anyhow!("root required"));
     }
+
+    check_dangerous_target(target_str, force)?;
 
     let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
 
@@ -524,6 +665,7 @@ fn handle_strict_multi(
     upload: Option<&str>,
     _watchdog: u64,
     allow_dangerous: bool,
+    force: bool,
     _duration: u64,
     verbose: bool,
 ) -> Result<()> {
@@ -532,6 +674,14 @@ fn handle_strict_multi(
     if !nix::unistd::geteuid().is_root() {
         eprintln!("zelynic requires root. Run with sudo.");
         return Err(anyhow::anyhow!("root required"));
+    }
+
+    // Check each target for dangerous names.
+    for t in targets_str.split(':') {
+        let t = t.trim();
+        if !t.is_empty() {
+            check_dangerous_target(t, force)?;
+        }
     }
 
     let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
@@ -572,6 +722,110 @@ fn handle_strict_multi(
     print_pin_summary(targets_str, &rates, applied);
 
     // Verify serve child is still alive after apply.
+    if !child_alive() {
+        let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
+        eprintln!("WARNING: Serve child died after applying policies!");
+        eprintln!("Log: {log}");
+    }
+    Ok(())
+}
+
+/// Handle `zelynic all-limit` — limit ALL user apps.
+/// System/dangerous apps are excluded unless --force.
+#[cfg(feature = "ebpf")]
+#[allow(clippy::too_many_arguments)]
+fn handle_all_limit(
+    rate: Option<&str>,
+    download: Option<&str>,
+    upload: Option<&str>,
+    _watchdog: u64,
+    allow_dangerous: bool,
+    force: bool,
+    verbose: bool,
+) -> Result<()> {
+    use crate::ebpf::identity::IdentityMap;
+    use crate::ebpf::limiter::{Limiter, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
+
+    if rates.download.is_none() && rates.upload.is_none() {
+        return Err(anyhow::anyhow!(
+            "No rate specified. Use positional rate or -d/-u flags.\n\
+             Example: zelynic all-limit 500kb"
+        ));
+    }
+
+    // Get all apps from identity map.
+    let mut identity = IdentityMap::new();
+    identity.refresh();
+
+    let mut user_apps: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    for app in identity.all() {
+        if app.comm.is_empty() {
+            continue;
+        }
+        if is_dangerous_target(&app.comm) {
+            if force {
+                user_apps.push(app.comm.clone());
+            } else {
+                skipped.push(app.comm.clone());
+            }
+        } else {
+            user_apps.push(app.comm.clone());
+        }
+    }
+
+    if user_apps.is_empty() {
+        eprintln!("No apps found to limit.");
+        return Ok(());
+    }
+
+    // Deduplicate (multiple cgroups may have same comm).
+    user_apps.sort();
+    user_apps.dedup();
+
+    eprintln!(
+        "Limiting {} app(s) to {}",
+        user_apps.len(),
+        rates
+            .download
+            .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+            .unwrap_or_default()
+    );
+
+    if !skipped.is_empty() {
+        eprintln!(
+            "Skipped {} system app(s) (use --force to include):",
+            skipped.len()
+        );
+        for s in &skipped {
+            eprintln!("  - {s}");
+        }
+    }
+
+    // Build targets list.
+    let targets: Vec<Target> = user_apps
+        .iter()
+        .map(|n| Target::ProcessName(n.clone()))
+        .collect();
+
+    // If no serve child running, spawn one.
+    if !child_alive() {
+        spawn_serve_child(verbose)?;
+    }
+
+    let mut limiter = Limiter::open_pinned(verbose)?;
+    let applied = limiter.apply_group(&targets, &rates)?;
+
+    print_pin_summary(&format!("{} apps", user_apps.len()), &rates, applied);
+
     if !child_alive() {
         let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
         eprintln!("WARNING: Serve child died after applying policies!");

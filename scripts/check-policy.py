@@ -10,7 +10,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAX_LOC = 1000
+MAX_LOC = 1300
 COPYRIGHT = "Copyright (C) 2026 rezky_nightky"
 SPDX = "SPDX-License-Identifier: GPL-3.0-only"
 

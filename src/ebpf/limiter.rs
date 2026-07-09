@@ -291,10 +291,10 @@ impl Limiter {
         sorted.sort_by_key(|(id, _)| *id);
 
         println!(
-            "  {:<30} {:>12} {:>12} {:>8} {:>8}",
-            "CGROUP", "DOWNLOAD", "UPLOAD", "ALLOWED", "DROPPED"
+            "  {:<30} {:>12} {:>12} {:>14} {:>14}",
+            "CGROUP", "DOWNLOAD", "UPLOAD", "ALLOWED (pkts)", "DROPPED (pkts)"
         );
-        println!("  {}", "─".repeat(74));
+        println!("  {}", "─".repeat(86));
 
         for (cgroup_id, (dl, ul)) in &sorted {
             let label = self.identity.label(*cgroup_id);
@@ -305,11 +305,15 @@ impl Limiter {
                 .map(|r| format!("{}/s", format_rate(r)))
                 .unwrap_or_else(|| "—".to_string());
             let s = stats.iter().find(|(id, _)| id == cgroup_id);
-            let allowed = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
-            let dropped = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
+            let allowed_pkt = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
+            let dropped_pkt = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
+            let allowed_bytes = s.map(|(_, s)| s.bytes_allowed).unwrap_or(0);
+            let dropped_bytes = s.map(|(_, s)| s.bytes_dropped).unwrap_or(0);
+            let allowed_str = format!("{} ({})", allowed_pkt, format_bytes(allowed_bytes));
+            let dropped_str = format!("{} ({})", dropped_pkt, format_bytes(dropped_bytes));
             println!(
-                "  {:<30} {:>12} {:>12} {:>8} {:>8}",
-                label, dl_str, ul_str, allowed, dropped
+                "  {:<30} {:>12} {:>12} {:>14} {:>14}",
+                label, dl_str, ul_str, allowed_str, dropped_str
             );
         }
     }
