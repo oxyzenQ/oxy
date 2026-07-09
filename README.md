@@ -63,7 +63,7 @@ same WiFi interface.
 ```bash
 git clone https://github.com/oxyzenQ/zelynic.git
 cd zelynic
-git checkout wolf-architecture
+git checkout dragon-architecture
 
 # Compile BPF programs
 clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
@@ -128,7 +128,7 @@ Lowercase units only:
 
 ## Architecture
 
-**Wolf Architecture** — pure eBPF, single hooking layer:
+**Dragon Architecture** — pure eBPF, single hooking layer:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -146,18 +146,18 @@ Lowercase units only:
 └─────────────────────────────────────────────────────────┘
 ```
 
-See [docs/WOLF_ARCHITECTURE.md](docs/WOLF_ARCHITECTURE.md) for full design.
+See [docs/DRAGON_ARCHITECTURE.md](docs/DRAGON_ARCHITECTURE.md) for full design.
 
 ## Branches
 
 | Branch | Purpose | Status |
 |--------|---------|--------|
 | `main` | Legacy v3.x (tc/nft/systemd-wrapper) | Stable, maintained |
-| `wolf-architecture` | Pure eBPF v4.0.0-alpha | Active development |
+| `dragon-architecture` | Pure eBPF v4.0.0-alpha | Active development |
 
 ## Documentation
 
-- [Wolf Architecture](docs/WOLF_ARCHITECTURE.md) — design + principles
+- [Dragon Architecture](docs/DRAGON_ARCHITECTURE.md) — design + principles
 - [Kernel Compatibility](docs/KERNEL_COMPATIBILITY.md) — requirements + distro matrix
 - [Migration to v4.0](docs/MIGRATION_V4.md) — v3.x → v4.0 guide
 - [Stress Test](scripts/stress-test.sh) — long-running enforcement test

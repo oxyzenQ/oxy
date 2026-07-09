@@ -1,7 +1,7 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Command handlers for zelynic CLI (Wolf Architecture — pure eBPF).
+//! Command handlers for zelynic CLI (Dragon Architecture — pure eBPF).
 
 pub(crate) mod backend;
 pub(crate) mod help;
@@ -229,9 +229,14 @@ fn spawn_serve_child(verbose: bool) -> Result<()> {
         cmd.arg(arg);
     }
 
-    // Redirect child stdout/stderr to /dev/null (it's a background process).
+    // Redirect child stderr to a log file so we can debug crashes.
+    // stdout to /dev/null (child doesn't use stdout).
+    let log_path = "/tmp/zelynic-serve.log";
+    let log_file = std::fs::File::create(log_path)
+        .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+    let log_stderr = log_file.try_clone().unwrap();
     cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::from(log_stderr));
     cmd.stdin(std::process::Stdio::null());
 
     // Critical: call setsid() in the child before exec.
@@ -262,12 +267,29 @@ fn spawn_serve_child(verbose: bool) -> Result<()> {
     for _ in 0..50 {
         // 50 × 100ms = 5s timeout
         if std::path::Path::new(PIN_MAP_POLICY_DL).exists() {
+            // Verify child is still alive after pinning.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if !nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok() {
+                // Child died after pinning — read log for error.
+                let log = std::fs::read_to_string(log_path).unwrap_or_default();
+                bail!(
+                    "Serve child died after pinning maps.\n\
+                     Log: {log}\n\
+                     Try: zelynic -v strict-single <target> <rate>"
+                );
+            }
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    bail!("Serve child failed to pin maps within 5 seconds. Check 'zelynic -v strict-single ...' for errors.")
+    // Timeout — read log for debugging.
+    let log = std::fs::read_to_string(log_path).unwrap_or_default();
+    bail!(
+        "Serve child failed to pin maps within 5 seconds.\n\
+         Log: {log}\n\
+         Try: zelynic -v strict-single ... for more details."
+    );
 }
 
 /// Serve mode handler — runs as background child process.
@@ -457,6 +479,14 @@ fn handle_strict_single(
 
     // Print summary and exit 0 — limit persists in background.
     print_pin_summary(target_str, &rates, applied);
+
+    // Verify serve child is still alive after apply.
+    if !child_alive() {
+        let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
+        eprintln!("WARNING: Serve child died after applying policies!");
+        eprintln!("Log: {log}");
+        eprintln!("The limit may not persist. Try: zelynic -v strict-single {target_str} <rate>");
+    }
     Ok(())
 }
 
@@ -515,6 +545,13 @@ fn handle_strict_multi(
     }
 
     print_pin_summary(targets_str, &rates, applied);
+
+    // Verify serve child is still alive after apply.
+    if !child_alive() {
+        let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
+        eprintln!("WARNING: Serve child died after applying policies!");
+        eprintln!("Log: {log}");
+    }
     Ok(())
 }
 

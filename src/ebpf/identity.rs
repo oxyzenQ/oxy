@@ -9,7 +9,7 @@
 //! Refreshed periodically (default 10s TTL) to handle process churn without
 //! paying the /proc walk cost on every observer poll.
 //!
-//! # Wolf Architecture — Layer 2: Identity Resolution
+//! # Dragon Architecture — Layer 2: Identity Resolution
 //!
 //! BPF programs return raw cgroup IDs. To make output human-readable, we
 //! reverse-resolve: walk /proc to find which PID lives in which cgroup, then

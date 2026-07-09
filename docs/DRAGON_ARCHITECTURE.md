@@ -1,4 +1,4 @@
-# Wolf Architecture
+# Dragon Architecture
 
 > Pure eBPF. Single hooking layer. No combined tools. Linux-only.
 
@@ -19,7 +19,7 @@ rule applied to `wlp1s0` survives a WiFi reconnect and silently shapes the
 wrong interface. An `nft` chain survives a service restart and blocks traffic
 to a process that no longer exists.
 
-**Wolf Architecture eliminates the coordination problem by using exactly one
+**Dragon Architecture eliminates the coordination problem by using exactly one
 mechanism: eBPF.** The kernel already knows which cgroup sent each packet. BPF
 lets us observe, count, and (future) shape that traffic in-kernel — no
 userspace tool coordination, no format mismatches, no leaked state.
@@ -28,7 +28,7 @@ userspace tool coordination, no format mismatches, no leaked state.
 
 1. **Pure eBPF.** All kernel-level operations are BPF programs. No `tc`, no
    `iptables`, no `nft`, no `systemd-run` cgroup tricks. If a feature can't be
-   done in BPF, it doesn't belong in wolf-architecture zelynic.
+   done in BPF, it doesn't belong in dragon-architecture zelynic.
 
 2. **Single Hooking Layer.** All observation and enforcement happens at BPF
    hook points (`cgroup_skb`, `sock_ops`, `xdp`, `tc`-cls-act-BPF — but
@@ -120,7 +120,7 @@ CLI output (`CounterSummary::print()`), JSON output (future), TUI (future).
 This layer never touches BPF directly — it consumes `CounterSummary` +
 `IdentityMap` and renders.
 
-## Roadmap (Wolf Architecture branch only)
+## Roadmap (Dragon Architecture branch only)
 
 This branch is the staging ground for the pure-eBPF rewrite. The legacy
 `tc`/`nft`/`systemd-wrapper` code stays on `main` for the v3.x line.
@@ -170,7 +170,7 @@ This branch is the staging ground for the pure-eBPF rewrite. The legacy
 - **No daemon mode.** Every invocation is one-shot. Fire-and-forget uses a
   minimal child process (sleeps + refreshes watchdog), not a daemon. The child
   dies on `unstrict` or system reboot.
-- **No combined-tool fallback.** If BPF can't do it, wolf-architecture zelynic
+- **No combined-tool fallback.** If BPF can't do it, dragon-architecture zelynic
   doesn't do it. The legacy `tc`/`nft` code stays on `main` for users who
   need it, but this branch is pure eBPF.
 - **No REST API / MCP / TUI-as-server.** CLI + config + exit codes. That's it.
@@ -178,18 +178,18 @@ This branch is the staging ground for the pure-eBPF rewrite. The legacy
 ## Branch Strategy
 
 - `main` — legacy zelynic v3.x line (`tc`/`nft`/`systemd-wrapper`). Tagged
-  releases continue here until wolf-architecture is production-ready.
-- `wolf-architecture` — pure eBPF rewrite. v4.0.0-alpha milestone. Active
+  releases continue here until dragon-architecture is production-ready.
+- `dragon-architecture` — pure eBPF rewrite. v4.0.0-alpha milestone. Active
   development. Will merge to `main` as v4.0.0 after cross-distro testing.
 - `intergalaxion` — **deleted** (was 44 commits of planning docs, 0 BPF programs).
-  Superseded by `wolf-architecture` which ships real code.
+  Superseded by `dragon-architecture` which ships real code.
 
 ## Naming
 
-"Wolf Architecture" — because a wolf pack operates with clear layering:
+"Dragon Architecture" — because a dragon pack operates with clear layering:
 scouts (observer), hunters (limiter), alpha (policy). Each role is distinct,
 each contributes to the pack's survival. No member tries to do everything
 alone.
 
-Also: the agent persona behind this work is `wolfzen`. The architecture
+Also: the agent persona behind this work is `dragonzen`. The architecture
 inherits the name.

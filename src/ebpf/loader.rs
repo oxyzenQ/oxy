@@ -37,7 +37,7 @@ pub struct Observer {
     cgroup_path: String,
     /// Previous stats for delta calculation.
     prev_stats: std::collections::HashMap<u32, CgroupStatsRaw>,
-    /// Wolf Architecture Layer 2: cgroup ID → process identity resolver.
+    /// Dragon Architecture Layer 2: cgroup ID → process identity resolver.
     /// Refreshed lazily via `maybe_refresh()` before each summary print.
     identity: IdentityMap,
 }
@@ -187,7 +187,7 @@ pub struct CgroupDelta {
 impl CounterSummary {
     /// Print summary using identity map for human-readable cgroup labels.
     ///
-    /// Wolf Architecture Layer 3: Aggregation enriches raw counters with
+    /// Dragon Architecture Layer 3: Aggregation enriches raw counters with
     /// identity (Layer 2) before presentation (Layer 4).
     pub fn print(&self, identity: &IdentityMap) {
         if self.total_packets == 0 {

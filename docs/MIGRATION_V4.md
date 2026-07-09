@@ -1,10 +1,10 @@
 # Migration Guide: v3.x → v4.0
 
-> How to migrate from legacy zelynic (tc/nft/systemd-wrapper) to Wolf Architecture (pure eBPF).
+> How to migrate from legacy zelynic (tc/nft/systemd-wrapper) to Dragon Architecture (pure eBPF).
 
 ## Why Migrate?
 
-| Aspect | v3.x (legacy) | v4.0 (Wolf Architecture) |
+| Aspect | v3.x (legacy) | v4.0 (Dragon Architecture) |
 |--------|---------------|--------------------------|
 | **Enforcement** | tc + nft + systemd-wrapper | Pure eBPF |
 | **LOC** | ~17,000 | ~3,600 (79% reduction) |
@@ -77,7 +77,7 @@ These v3.x commands are **gone** in v4.0:
 ```bash
 git clone https://github.com/oxyzenQ/zelynic.git
 cd zelynic
-git checkout wolf-architecture
+git checkout dragon-architecture
 
 # Compile BPF
 clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o

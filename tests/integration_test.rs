@@ -1,6 +1,6 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
-//! Integration tests for zelynic (Wolf Architecture — pure eBPF)
+//! Integration tests for zelynic (Dragon Architecture — pure eBPF)
 //!
 //! These tests require root privileges and a Linux system.
 //! Run with: sudo cargo test --test integration_test
@@ -162,8 +162,8 @@ fn test_version() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Version:")
-            && stdout.contains("Architecture: Wolf")
+            && stdout.contains("Architecture: Dragon")
             && stdout.contains("Source: https://github.com/oxyzenQ/zelynic"),
-        "Version should contain complete zelynic metadata with Wolf Architecture"
+        "Version should contain complete zelynic metadata with Dragon Architecture"
     );
 }

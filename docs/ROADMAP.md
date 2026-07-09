@@ -2,7 +2,7 @@
 
 > Future direction after v4.0.0 stable release.
 
-## v4.0.0 (Current — Wolf Architecture)
+## v4.0.0 (Current — Dragon Architecture)
 
 **Status**: v4.0.0-alpha, pending cross-distro testing
 

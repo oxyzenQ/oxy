@@ -3,7 +3,7 @@
 
 //! Audit log — JSONL event log for eBPF enforcement actions.
 //!
-//! Wolf Architecture safety layer: records every policy apply, enforcement
+//! Dragon Architecture safety layer: records every policy apply, enforcement
 //! start/stop, and watchdog event to `~/.local/share/zelynic/audit.jsonl`.
 //!
 //! Used for post-mortem debugging: "why was firefox slow at 3pm?" → grep

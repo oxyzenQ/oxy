@@ -1,6 +1,6 @@
 # Kernel Compatibility
 
-> Requirements for running zelynic v4.0.0-alpha (Wolf Architecture).
+> Requirements for running zelynic v4.0.0-alpha (Dragon Architecture).
 
 ## Minimum Requirements
 

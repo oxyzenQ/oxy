@@ -1,7 +1,7 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Capability detection (Wolf Architecture — eBPF only).
+//! Capability detection (Dragon Architecture — eBPF only).
 //!
 //! Simplified from the legacy tc/nft/systemd scoring matrix. Now only
 //! detects: cgroup v2, BPF filesystem, kernel version, root privileges.

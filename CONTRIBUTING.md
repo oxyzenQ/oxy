@@ -68,7 +68,7 @@ scripts/
    // SPDX-License-Identifier: GPL-3.0-only
    ```
 3. **License**: GPL-3.0-only
-4. **No tc/nft/systemd-wrapper**: pure eBPF only on `wolf-architecture` branch
+4. **No tc/nft/systemd-wrapper**: pure eBPF only on `dragon-architecture` branch
 5. **Fail-safe**: BPF programs return 1 (allow) on every error path
 6. **Lowercase units**: rate formats use `kb`, `mb`, `gb` (no uppercase, no `/s`)
 
@@ -85,4 +85,4 @@ yamllint, codespell, actionlint.
 ## Branch Strategy
 
 - `main` — legacy v3.x (tc/nft/systemd-wrapper). Stable, maintained.
-- `wolf-architecture` — pure eBPF v4.0.0-alpha. Active development.
+- `dragon-architecture` — pure eBPF v4.0.0-alpha. Active development.

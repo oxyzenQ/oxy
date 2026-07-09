@@ -75,7 +75,7 @@ pub fn print_version() {
 pub fn print_info() {
     println!("Version: {}", version_string());
     println!("Build: {} ({})", build_string(), build_hash());
-    println!("Architecture: Wolf (pure eBPF)");
+    println!("Architecture: Dragon (pure eBPF)");
     println!("Copyright: {}", COPYRIGHT);
     println!("License: {}", LICENSE);
     println!("Source: {}", REPOSITORY);

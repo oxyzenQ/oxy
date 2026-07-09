@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Wolf Architecture — v4.0.0-alpha Milestone
+### Dragon Architecture — v4.0.0-alpha Milestone
 
 Pure eBPF rate limiter. One of the first open-source Linux bandwidth managers
 built around a pure eBPF datapath with per-application rate limiting.
@@ -54,11 +54,11 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
 | unstrict-all | Remove all + cleanup | No residue | ✅ |
 | CPU/memory | Serve child | < 1% CPU, < 10 MB RAM | ✅ |
 
-### Added — Wolf Architecture Branch (Legacy Code Removal — Pure eBPF)
+### Added — Dragon Architecture Branch (Legacy Code Removal — Pure eBPF)
 
 - **Legacy code removed**: ~17,000 LOC of `tc`/`nft`/`systemd-wrapper`/
   `accounting`/`monitor`/`profile`/`qos`/`tui`/`units`/`auto`/`watch` code
-  deleted from `wolf-architecture` branch. Zelynic is now **pure eBPF** on
+  deleted from `dragon-architecture` branch. Zelynic is now **pure eBPF** on
   this branch — no combined tools, no wrapper coordination.
 - **Result**: 3,271 LOC Rust + 334 LOC BPF C = 3,605 total (79% reduction
   from ~17,000 LOC legacy).
@@ -78,9 +78,9 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
 - **Updated `main.rs`**: removed `--iface` flag handling (no longer needed —
   eBPF attaches to cgroup v2 root, not per-interface).
 - **Updated `Cargo.toml`**: description → "Pure eBPF network rate limiter
-  for Linux (Wolf Architecture)", keywords updated to `ebpf`-first.
+  for Linux (Dragon Architecture)", keywords updated to `ebpf`-first.
 
-### Added — Wolf Architecture Branch (Safety Layer)
+### Added — Dragon Architecture Branch (Safety Layer)
 
 - **BPF self-destruct watchdog (Priority 1 — CRITICAL)**: New `watchdog_deadline`
   BPF map (ARRAY, 1 entry). BPF program checks deadline at the very START of
@@ -106,7 +106,7 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
   BPF map writes (aya 0.13 requires `&mut MapData` for `insert()`). Restructured
   to two-phase (resolve targets, then write) to avoid borrow checker conflict.
 
-### Added — Wolf Architecture Branch (Limiter Layer 0)
+### Added — Dragon Architecture Branch (Limiter Layer 0)
 
 - **eBPF token-bucket enforcer (`bpf/limiter.bpf.c`)**: Pure-BPF per-cgroup
   rate enforcement. Three BPF maps: `cgroup_policy` (userspace-written),
@@ -127,12 +127,12 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
   cgroup IDs (`73386:1MB/s`) or process names (`firefox:500KB/s` — resolves
   all matching cgroups).
 - **`intergalaxion` branch deleted**: 44 commits of planning docs, 0 BPF
-  programs. Superseded by `wolf-architecture` branch which ships real code.
-- **`docs/WOLF_ARCHITECTURE.md` roadmap updated**: Limiter marked done,
+  programs. Superseded by `dragon-architecture` branch which ships real code.
+- **`docs/DRAGON_ARCHITECTURE.md` roadmap updated**: Limiter marked done,
   added BPF map pinning (persistent policies) as next priority, added
   deprecation of `tc`/`nft`/`systemd-wrapper` code paths as next step.
 
-### Added — Wolf Architecture Branch (Identity Layer 2)
+### Added — Dragon Architecture Branch (Identity Layer 2)
 
 - **eBPF identity resolution (Layer 2)**: `IdentityMap` walks `/proc/*/cgroup`
   + `/sys/fs/cgroup{path}/cgroup.id` to build a reverse map: cgroup ID →
@@ -143,11 +143,11 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
   now takes `&IdentityMap` and renders `cg:73386 (firefox)` instead of bare
   `cg:73386`. Column width expanded from 20 to 30 chars. New `print_verbose()`
   method shows the full cgroup path.
-- **`docs/WOLF_ARCHITECTURE.md`**: documents the pure-eBPF architecture vision
+- **`docs/DRAGON_ARCHITECTURE.md`**: documents the pure-eBPF architecture vision
   (5-layer model: BPF → Map → Identity → Aggregation → Presentation), principles
   (pure eBPF, single hooking layer, userspace-composable, fail-safe,
   observable, Linux-only), non-goals (no Windows, no daemon, no combined-tool
-  fallback), and branch strategy (`main` = legacy v3.x, `wolf-architecture` =
+  fallback), and branch strategy (`main` = legacy v3.x, `dragon-architecture` =
   pure eBPF staging).
 - **Observer now primes identity map before first poll**: `handle_ebpf_observe()`
   calls `refresh_identity()` once at startup so the first summary already has
@@ -168,11 +168,11 @@ Real enforcement: Chromium 670 Kbps on 100kb target, Brave 730 Kbps on 100kb tar
 
 ### Notes
 
-- This work lives on the `wolf-architecture` branch. **No tag, no release.**
+- This work lives on the `dragon-architecture` branch. **No tag, no release.**
   The `main` branch continues the v3.x legacy line (`tc`/`nft`/`systemd-wrapper`).
-  The `wolf-architecture` branch is the staging ground for the pure-eBPF rewrite.
+  The `dragon-architecture` branch is the staging ground for the pure-eBPF rewrite.
 - The `intergalaxion` branch has been **deleted** (was 44 commits of planning
-  docs, 0 BPF programs). Superseded by `wolf-architecture`.
+  docs, 0 BPF programs). Superseded by `dragon-architecture`.
 - **Policies are ephemeral** in this phase: they live in the BPF map for the
   duration of the `enforce` command. When zelynic exits, the BPF program is
   unloaded and all policies are lost. Future work: BPF map pinning for
