@@ -201,6 +201,25 @@ pub fn format_rate(bps: u64) -> String {
     format_bytes(bps)
 }
 
+/// Get terminal width in columns. Uses ioctl TIOCGWINSZ.
+/// Falls back to 80 if detection fails (piped output, no tty).
+pub fn terminal_width() -> usize {
+    use libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
+    let mut ws: winsize = winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: ioctl with TIOCGWINSZ writes to a valid winsize struct.
+    let ret = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut ws) };
+    if ret == 0 && ws.ws_col > 0 {
+        ws.ws_col as usize
+    } else {
+        80
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

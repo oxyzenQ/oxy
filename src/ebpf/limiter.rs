@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::ebpf::identity::IdentityMap;
 use crate::ebpf::limiter_types::{
-    default_burst, find_bpf_object, monotonic_ns, BucketRaw, BPF_OBJECT_PATH,
+    default_burst, find_bpf_object, monotonic_ns, terminal_width, BucketRaw, BPF_OBJECT_PATH,
 };
 
 // Re-export public types/functions for external use.
@@ -290,30 +290,95 @@ impl Limiter {
         let mut sorted: Vec<_> = combined.into_iter().collect();
         sorted.sort_by_key(|(id, _)| *id);
 
-        println!(
-            "  {:<30} {:>12} {:>12} {:>14} {:>14}",
-            "CGROUP", "DOWNLOAD", "UPLOAD", "ALLOWED (pkts)", "DROPPED (pkts)"
-        );
-        println!("  {}", "─".repeat(86));
+        // Build row data first so we can calculate column widths.
+        let rows: Vec<(String, String, String, String, String)> = sorted
+            .iter()
+            .map(|(cgroup_id, (dl, ul))| {
+                let label = self.identity.label(*cgroup_id);
+                let dl_str = dl
+                    .map(|r| format!("{}/s", format_rate(r)))
+                    .unwrap_or_else(|| "—".to_string());
+                let ul_str = ul
+                    .map(|r| format!("{}/s", format_rate(r)))
+                    .unwrap_or_else(|| "—".to_string());
+                let s = stats.iter().find(|(id, _)| id == cgroup_id);
+                let allowed_pkt = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
+                let dropped_pkt = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
+                let allowed_bytes = s.map(|(_, s)| s.bytes_allowed).unwrap_or(0);
+                let dropped_bytes = s.map(|(_, s)| s.bytes_dropped).unwrap_or(0);
+                let allowed_str = format!("{} ({})", allowed_pkt, format_bytes(allowed_bytes));
+                let dropped_str = format!("{} ({})", dropped_pkt, format_bytes(dropped_bytes));
+                (label, dl_str, ul_str, allowed_str, dropped_str)
+            })
+            .collect();
 
-        for (cgroup_id, (dl, ul)) in &sorted {
-            let label = self.identity.label(*cgroup_id);
-            let dl_str = dl
-                .map(|r| format!("{}/s", format_rate(r)))
-                .unwrap_or_else(|| "—".to_string());
-            let ul_str = ul
-                .map(|r| format!("{}/s", format_rate(r)))
-                .unwrap_or_else(|| "—".to_string());
-            let s = stats.iter().find(|(id, _)| id == cgroup_id);
-            let allowed_pkt = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
-            let dropped_pkt = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
-            let allowed_bytes = s.map(|(_, s)| s.bytes_allowed).unwrap_or(0);
-            let dropped_bytes = s.map(|(_, s)| s.bytes_dropped).unwrap_or(0);
-            let allowed_str = format!("{} ({})", allowed_pkt, format_bytes(allowed_bytes));
-            let dropped_str = format!("{} ({})", dropped_pkt, format_bytes(dropped_bytes));
+        // Dynamic column widths based on terminal width.
+        let term_w = terminal_width().saturating_sub(4); // 2 for indent + 2 margin
+        let headers = ["CGROUP", "DOWNLOAD", "UPLOAD", "ALLOWED", "DROPPED"];
+
+        // Calculate natural column widths from headers + data.
+        let mut col_widths = [0usize; 5];
+        for (i, h) in headers.iter().enumerate() {
+            col_widths[i] = h.len();
+        }
+        for row in &rows {
+            col_widths[0] = col_widths[0].max(row.0.chars().count());
+            col_widths[1] = col_widths[1].max(row.1.len());
+            col_widths[2] = col_widths[2].max(row.2.len());
+            col_widths[3] = col_widths[3].max(row.3.len());
+            col_widths[4] = col_widths[4].max(row.4.len());
+        }
+
+        // Total width = sum of columns + 4 spaces (separators)
+        let total: usize = col_widths.iter().sum::<usize>() + 4;
+        if total > term_w {
+            // Shrink CGROUP column first (most flexible).
+            let excess = total - term_w;
+            col_widths[0] = col_widths[0].saturating_sub(excess).max(10);
+        }
+
+        // Print header
+        println!(
+            "  {:<w0$} {:>w1$} {:>w2$} {:>w3$} {:>w4$}",
+            headers[0],
+            headers[1],
+            headers[2],
+            headers[3],
+            headers[4],
+            w0 = col_widths[0],
+            w1 = col_widths[1],
+            w2 = col_widths[2],
+            w3 = col_widths[3],
+            w4 = col_widths[4]
+        );
+        let sep_len: usize = col_widths.iter().sum::<usize>() + 4;
+        println!("  {}", "─".repeat(sep_len));
+
+        // Print rows
+        for row in &rows {
+            // Truncate label if needed
+            let label = if row.0.chars().count() > col_widths[0] {
+                let truncated: String = row
+                    .0
+                    .chars()
+                    .take(col_widths[0].saturating_sub(1))
+                    .collect();
+                format!("{truncated}…")
+            } else {
+                row.0.clone()
+            };
             println!(
-                "  {:<30} {:>12} {:>12} {:>14} {:>14}",
-                label, dl_str, ul_str, allowed_str, dropped_str
+                "  {:<w0$} {:>w1$} {:>w2$} {:>w3$} {:>w4$}",
+                label,
+                row.1,
+                row.2,
+                row.3,
+                row.4,
+                w0 = col_widths[0],
+                w1 = col_widths[1],
+                w2 = col_widths[2],
+                w3 = col_widths[3],
+                w4 = col_widths[4]
             );
         }
     }
