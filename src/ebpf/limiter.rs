@@ -37,10 +37,21 @@ pub struct Limiter {
 
 impl Limiter {
     /// Load limiter BPF object and attach to cgroup v2 root (both ingress + egress).
-    pub fn attach(verbose: bool) -> Result<Self> {
+    /// Programs are pinned to /sys/fs/bpf/zelynic/ so they survive process exit.
+    pub fn attach(verbose: bool) -> Result<()> {
         let cgroup_path = "/sys/fs/cgroup";
         if !PathBuf::from(cgroup_path).exists() {
             bail!("cgroup v2 not found at {cgroup_path}");
+        }
+
+        // Check if programs already pinned (from previous run).
+        let dl_pin = "/sys/fs/bpf/zelynic/enforce_dl";
+        let ul_pin = "/sys/fs/bpf/zelynic/enforce_ul";
+        if PathBuf::from(dl_pin).exists() && PathBuf::from(ul_pin).exists() {
+            if verbose {
+                eprintln!("[limiter] BPF programs already pinned — reusing");
+            }
+            return Ok(());
         }
 
         let obj_path = find_bpf_object()?;
@@ -50,9 +61,13 @@ impl Limiter {
         let obj_data = std::fs::read(&obj_path)
             .context(format!("Failed to read BPF object: {}", obj_path.display()))?;
 
+        // Use Ebpf::load with map_pin_path via EbpfLoader.
         let mut bpf = Ebpf::load(&obj_data).context("Failed to load BPF object")?;
 
-        // Load and attach download program (ingress).
+        // Create pin directory.
+        std::fs::create_dir_all("/sys/fs/bpf/zelynic")?;
+
+        // Load + attach + pin download program (ingress).
         let dl_prog: &mut CgroupSkb = bpf
             .program_mut("enforce_dl")
             .context("BPF program 'enforce_dl' not found")?
@@ -70,7 +85,10 @@ impl Limiter {
             )
             .context("Failed to attach enforce_dl (ingress)")?;
 
-        // Load and attach upload program (egress).
+        // Pin the program so it survives process exit.
+        dl_prog.pin(dl_pin).context("Failed to pin enforce_dl")?;
+
+        // Load + attach + pin upload program (egress).
         let ul_prog: &mut CgroupSkb = bpf
             .program_mut("enforce_ul")
             .context("BPF program 'enforce_ul' not found")?
@@ -85,23 +103,21 @@ impl Limiter {
             )
             .context("Failed to attach enforce_ul (egress)")?;
 
+        ul_prog.pin(ul_pin).context("Failed to pin enforce_ul")?;
+
         if verbose {
-            eprintln!("[limiter] Attached to {cgroup_path} (ingress + egress)");
+            eprintln!("[limiter] Attached + pinned to {cgroup_path} (ingress + egress)");
         }
 
-        let mut limiter = Limiter {
-            bpf: Some(bpf),
-            cgroup_path: cgroup_path.to_string(),
-            identity: IdentityMap::new(),
-            verbose,
-        };
+        // Drop Ebpf object — programs stay loaded because pinned.
+        drop(bpf);
+        Ok(())
+    }
 
-        let resolved = limiter.identity.refresh();
-        if verbose {
-            eprintln!("[limiter] Identity map: {} cgroups resolved", resolved);
-        }
-
-        Ok(limiter)
+    /// Check if BPF programs are already pinned (active from previous run).
+    pub fn is_pinned() -> bool {
+        PathBuf::from("/sys/fs/bpf/zelynic/enforce_dl").exists()
+            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_ul").exists()
     }
 
     /// Apply strict-single: individual policy per cgroup.

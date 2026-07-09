@@ -9,7 +9,7 @@ pub(crate) mod help;
 #[cfg(not(feature = "ebpf"))]
 use anyhow::Result;
 #[cfg(feature = "ebpf")]
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
@@ -30,13 +30,6 @@ const PID_FILE: &str = "/tmp/zelynic.pid";
 
 /// Top-level CLI dispatch.
 pub(crate) fn dispatch(cli: Cli) -> Result<()> {
-    // Serve mode: this is the background child process.
-    // It loads BPF, pins maps, and keeps BPF alive until killed.
-    #[cfg(feature = "ebpf")]
-    if cli.serve {
-        return handle_serve(&cli);
-    }
-
     match cli.command {
         Some(Commands::StrictSingle {
             target,
@@ -241,262 +234,20 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 // ━━ Command handlers (ebpf feature) ━━
 
 /// Check if serve child is running.
+/// Remove ALL BPF pin files (programs + maps). Full cleanup.
 #[cfg(feature = "ebpf")]
-fn child_alive() -> bool {
-    if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            // kill -0 checks if process exists without sending signal.
-            return nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
-        }
-    }
-    false
-}
-
-/// Spawn the serve child process. It loads BPF, pins maps, and keeps BPF alive.
-#[cfg(feature = "ebpf")]
-fn spawn_serve_child(verbose: bool) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
-
-    let exe = std::env::current_exe().context("Failed to get current exe")?;
-    let mut cmd = Command::new(&exe);
-    cmd.arg("--serve");
-
-    // Pass through the same command + args.
-    let args: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|a| a != "--serve")
-        .collect();
-    for arg in &args {
-        cmd.arg(arg);
-    }
-
-    // Redirect child stderr to a log file so we can debug crashes.
-    // stdout to /dev/null (child doesn't use stdout).
-    let log_path = "/tmp/zelynic-serve.log";
-    let log_file = std::fs::File::create(log_path)
-        .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
-    let log_stderr = log_file.try_clone().unwrap();
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::from(log_stderr));
-    cmd.stdin(std::process::Stdio::null());
-
-    // Critical: call setsid() in the child before exec.
-    // This creates a new session + process group, so the child is NOT
-    // killed when the parent exits (no SIGHUP). Without this, the child
-    // dies when the parent zelynic process exits.
-    unsafe {
-        cmd.pre_exec(|| {
-            // Create new session — detach from parent's process group.
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    let child = cmd.spawn().context("Failed to spawn serve child")?;
-    let pid = child.id();
-
-    // Write PID file.
-    std::fs::write(PID_FILE, pid.to_string()).context("Failed to write PID file")?;
-
-    if verbose {
-        eprintln!("[limiter] Serve child spawned (PID {pid})");
-    }
-
-    // Clean up stale pin files before spawning child.
-    // Previous crash may have left stale files → child pin fails with EEXIST.
-    for path in &[
-        PIN_MAP_POLICY_DL,
-        PIN_MAP_POLICY_UL,
-        PIN_MAP_WATCHDOG,
-        PIN_MAP_STATS,
-    ] {
-        let _ = std::fs::remove_file(path);
-    }
-
-    // Wait for maps to be pinned (child needs time to load BPF + pin).
-    // Track the old state so we don't mistake stale files for new ones.
-    for _ in 0..50 {
-        // 50 × 100ms = 5s timeout
-        if std::path::Path::new(PIN_MAP_POLICY_DL).exists() {
-            // Verify child is still alive after pinning.
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            if !nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok() {
-                // Child died after pinning — read log for error.
-                let log = std::fs::read_to_string(log_path).unwrap_or_default();
-                bail!(
-                    "Serve child died after pinning maps.\n\
-                     Log: {log}\n\
-                     Try: zelynic -v strict-single <target> <rate>"
-                );
-            }
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    // Timeout — read log for debugging.
-    let log = std::fs::read_to_string(log_path).unwrap_or_default();
-    bail!(
-        "Serve child failed to pin maps within 5 seconds.\n\
-         Log: {log}\n\
-         Try: zelynic -v strict-single ... for more details."
-    );
-}
-
-/// Serve mode handler — runs as background child process.
-/// Loads BPF, pins maps, applies initial policies, refreshes watchdog until killed.
-#[cfg(feature = "ebpf")]
-fn handle_serve(cli: &Cli) -> Result<()> {
-    use crate::ebpf::limiter::{Limiter, Target};
-    use std::time::{Duration, Instant};
-
-    // Parse the strict command from cli.
-    match &cli.command {
-        Some(Commands::StrictSingle {
-            target,
-            rate,
-            download,
-            upload,
-            watchdog,
-            allow_dangerous,
-            ..
-        }) => {
-            let rates = resolve_rates(
-                rate.as_deref(),
-                download.as_deref(),
-                upload.as_deref(),
-                *allow_dangerous,
-            )?;
-
-            let target_obj = Target::parse(target);
-            let watchdog = if *watchdog < 5 { 5 } else { *watchdog };
-
-            // Load BPF, attach, pin maps.
-            std::fs::create_dir_all(PIN_DIR)?;
-            let mut limiter = Limiter::attach(cli.verbose)?;
-            limiter.refresh_watchdog(watchdog)?;
-
-            // Pin maps so parent can access them.
-            pin_maps(&limiter)?;
-
-            // Apply initial policies.
-            limiter.apply_single(&target_obj, &rates)?;
-
-            // Loop: refresh watchdog until killed.
-            let _start = Instant::now();
-            loop {
-                if let Err(e) = limiter.refresh_watchdog(watchdog) {
-                    eprintln!("[serve] watchdog refresh failed: {e}");
-                }
-                std::thread::sleep(Duration::from_millis(200));
-
-                // Check if we should exit (duration-based, for testing).
-                // Default duration=5 means run for 5 seconds then exit.
-                // duration=0 means run forever.
-                // Actually in serve mode, we run forever until SIGTERM.
-                // But we keep duration for backwards compat with --duration 0.
-            }
-        }
-        Some(Commands::StrictMulti {
-            targets,
-            rate,
-            download,
-            upload,
-            watchdog,
-            allow_dangerous,
-            ..
-        }) => {
-            let rates = resolve_rates(
-                rate.as_deref(),
-                download.as_deref(),
-                upload.as_deref(),
-                *allow_dangerous,
-            )?;
-
-            let target_list: Vec<Target> = targets
-                .split(':')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(Target::parse)
-                .collect();
-
-            let watchdog = if *watchdog < 5 { 5 } else { *watchdog };
-
-            std::fs::create_dir_all(PIN_DIR)?;
-            let mut limiter = Limiter::attach(cli.verbose)?;
-            limiter.refresh_watchdog(watchdog)?;
-            pin_maps(&limiter)?;
-            limiter.apply_group(&target_list, &rates)?;
-
-            loop {
-                if let Err(e) = limiter.refresh_watchdog(watchdog) {
-                    eprintln!("[serve] watchdog refresh failed: {e}");
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-        }
-        _ => {
-            bail!("--serve mode only works with strict-single or strict-multi");
-        }
-    }
-}
-
-/// Pin BPF maps to /sys/fs/bpf/zelynic/ for parent access.
-/// Cleans up stale pin files first to prevent "File exists" errors.
-#[cfg(feature = "ebpf")]
-fn pin_maps(limiter: &crate::ebpf::limiter::Limiter) -> Result<()> {
-    // Remove stale pin files from previous runs.
-    // If previous zelynic crashed without cleanup, these files persist
-    // and BPF_OBJ_PIN fails with EEXIST.
-    for path in &[
-        PIN_MAP_POLICY_DL,
-        PIN_MAP_POLICY_UL,
-        PIN_MAP_WATCHDOG,
-        PIN_MAP_STATS,
-    ] {
-        let _ = std::fs::remove_file(path);
-    }
-
-    limiter.pin_map("cgroup_policy_dl", PIN_MAP_POLICY_DL)?;
-    limiter.pin_map("cgroup_policy_ul", PIN_MAP_POLICY_UL)?;
-    limiter.pin_map("watchdog_deadline", PIN_MAP_WATCHDOG)?;
-    limiter.pin_map("cgroup_limiter_stats", PIN_MAP_STATS)?;
-    Ok(())
-}
-
-/// Kill serve child and cleanup.
-#[cfg(feature = "ebpf")]
-fn kill_serve_child() -> Result<()> {
-    if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
-                Some(nix::sys::signal::Signal::SIGTERM),
-            );
-            // Wait for child to exit (max 3 seconds).
-            for _ in 0..30 {
-                if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
-                    break; // process gone
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            // Force kill if still alive.
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
-                Some(nix::sys::signal::Signal::SIGKILL),
-            );
-        }
-    }
-
-    // Remove PID file + pin files.
-    let _ = std::fs::remove_file(PID_FILE);
+fn unpin_all_bpf() -> Result<()> {
+    // Remove program pins.
+    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl");
+    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul");
+    // Remove map pins.
     let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
     let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);
     let _ = std::fs::remove_file(PIN_MAP_WATCHDOG);
     let _ = std::fs::remove_file(PIN_MAP_STATS);
+    // Remove PID file (legacy).
+    let _ = std::fs::remove_file(PID_FILE);
+    // Remove pin directory.
     let _ = std::fs::remove_dir(PIN_DIR);
     Ok(())
 }
@@ -630,12 +381,10 @@ fn handle_strict_single(
 
     let target = Target::parse(target_str);
 
-    // If no serve child running, spawn one.
-    if !child_alive() {
-        spawn_serve_child(verbose)?;
-    }
+    // Attach BPF programs (pins to /sys/fs/bpf/zelynic/ — survives exit).
+    crate::ebpf::limiter::Limiter::attach(verbose)?;
 
-    // Open pinned maps and write policy directly.
+    // Open pinned maps and write policy.
     let mut limiter = Limiter::open_pinned(verbose)?;
     let applied = limiter.apply_single(&target, &rates)?;
     if applied == 0 {
@@ -643,16 +392,7 @@ fn handle_strict_single(
         return Ok(());
     }
 
-    // Print summary and exit 0 — limit persists in background.
     print_pin_summary(target_str, &rates, applied);
-
-    // Verify serve child is still alive after apply.
-    if !child_alive() {
-        let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
-        eprintln!("WARNING: Serve child died after applying policies!");
-        eprintln!("Log: {log}");
-        eprintln!("The limit may not persist. Try: zelynic -v strict-single {target_str} <rate>");
-    }
     Ok(())
 }
 
@@ -708,8 +448,8 @@ fn handle_strict_multi(
     }
 
     // If no serve child running, spawn one.
-    if !child_alive() {
-        spawn_serve_child(verbose)?;
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
+        crate::ebpf::limiter::Limiter::attach(verbose)?;
     }
 
     let mut limiter = Limiter::open_pinned(verbose)?;
@@ -722,7 +462,7 @@ fn handle_strict_multi(
     print_pin_summary(targets_str, &rates, applied);
 
     // Verify serve child is still alive after apply.
-    if !child_alive() {
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
         let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
         eprintln!("WARNING: Serve child died after applying policies!");
         eprintln!("Log: {log}");
@@ -817,8 +557,8 @@ fn handle_all_limit(
         .collect();
 
     // If no serve child running, spawn one.
-    if !child_alive() {
-        spawn_serve_child(verbose)?;
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
+        crate::ebpf::limiter::Limiter::attach(verbose)?;
     }
 
     let mut limiter = Limiter::open_pinned(verbose)?;
@@ -826,7 +566,7 @@ fn handle_all_limit(
 
     print_pin_summary(&format!("{} apps", user_apps.len()), &rates, applied);
 
-    if !child_alive() {
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
         let log = std::fs::read_to_string("/tmp/zelynic-serve.log").unwrap_or_default();
         eprintln!("WARNING: Serve child died after applying policies!");
         eprintln!("Log: {log}");
@@ -968,7 +708,7 @@ fn handle_unstrict(target_str: &str, verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    if !child_alive() {
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
         eprintln!("No active limits. Nothing to remove.");
         return Ok(());
     }
@@ -994,7 +734,7 @@ fn handle_unstrict(target_str: &str, verbose: bool) -> Result<()> {
         .read_policies_public(crate::ebpf::limiter::Direction::Upload)
         .unwrap_or_default();
     if dl.is_empty() && ul.is_empty() {
-        kill_serve_child()?;
+        unpin_all_bpf()?;
         if verbose {
             eprintln!("[limiter] No policies remain — serve child killed, no residue");
         }
@@ -1010,12 +750,12 @@ fn handle_unstrict_all(_verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    if !child_alive() {
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
         eprintln!("No active limits. Nothing to remove.");
         return Ok(());
     }
 
-    kill_serve_child()?;
+    unpin_all_bpf()?;
     eprintln!("All limits removed, serve child killed, no residue.");
     Ok(())
 }
@@ -1029,7 +769,7 @@ fn handle_status(verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    if !child_alive() {
+    if !crate::ebpf::limiter::Limiter::is_pinned() {
         eprintln!("No active limits.");
         return Ok(());
     }
