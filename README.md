@@ -148,6 +148,35 @@ Lowercase units only:
 
 See [docs/DRAGON_ARCHITECTURE.md](docs/DRAGON_ARCHITECTURE.md) for full design.
 
+## Philosophy
+
+**Stable, strong, boring, easy maintenance, silent but killer.**
+
+zelynic is a Linux utility that is simple from the user's perspective,
+but powerful under the hood. The interface rarely changes. Features don't
+explode. Every release makes it slightly more stable, slightly faster,
+slightly easier to maintain.
+
+### What zelynic IS
+
+- ✅ **Single CLI binary** — no daemon, no service, no config file
+- ✅ **Pure eBPF** — no tc, no nft, no wrappers
+- ✅ **Small codebase** — minimal dependencies, easy to audit
+- ✅ **Predictable behavior** — same input → same output, every time
+- ✅ **Linux-first** — BSD/macOS source support OK, Windows never
+
+### What zelynic will NEVER be
+
+- ❌ No TUI (terminal user interface)
+- ❌ No systemd service dependency
+- ❌ No `config.toml` (CLI flags only)
+- ❌ No daemon mode
+- ❌ No REST API
+- ❌ No Windows support
+
+This is intentional. Many projects break after adding "too many features".
+zelynic stays small on purpose.
+
 ## Branches
 
 | Branch | Purpose | Status |
@@ -206,5 +235,5 @@ GPL-3.0-only
 ---
 
 <p align="center">
-  <em>Clean safely. Explain every decision. Recover anything.</em>
+  <em>Simple from the user's perspective. Powerful under the hood.</em>
 </p>
