@@ -27,5 +27,10 @@ agent/
 other ai/
 zelynic/
 
+# Workspace artifacts — must never be tracked in this repo
+skills/
+upload/
+tool-results/
+
 # object
 *.o
