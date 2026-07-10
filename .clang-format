@@ -5,7 +5,7 @@
 # Based on LLVM style with BPF-specific adjustments.
 
 BasedOnStyle: LLVM
-Language: C
+Language: Cpp
 ColumnLimit: 80
 IndentWidth: 4
 TabWidth: 4
