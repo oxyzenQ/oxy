@@ -142,6 +142,12 @@ fn print_report(report: &CapabilityReport) {
         }
     }
 
+    // Check BPF pin state (only if eBPF is supported + running as root).
+    if report.ebpf_supported && report.system.is_root {
+        println!();
+        print_pin_state();
+    }
+
     if report.ebpf_supported && report.system.is_root {
         println!();
         println!(
@@ -150,6 +156,55 @@ fn print_report(report: &CapabilityReport) {
         );
     }
 }
+
+/// Print BPF pin state — checks /sys/fs/bpf/zelynic/ for active/stale pins.
+#[cfg(feature = "ebpf")]
+fn print_pin_state() {
+    use colored::Colorize;
+
+    let pin_dir = std::path::Path::new("/sys/fs/bpf/zelynic");
+
+    if !pin_dir.exists() {
+        println!(
+            "  Pins:       {} (no limits active)",
+            "clean".green().bold()
+        );
+        return;
+    }
+
+    let entries: Vec<_> = std::fs::read_dir(pin_dir)
+        .map(|d| d.filter_map(|e| e.ok()).collect())
+        .unwrap_or_default();
+
+    if entries.is_empty() {
+        println!("  Pins:       {} (empty directory)", "clean".green().bold());
+        return;
+    }
+
+    // Check if all 4 critical pins exist (valid state).
+    let has_dl_prog = pin_dir.join("enforce_dl").exists();
+    let has_ul_prog = pin_dir.join("enforce_ul").exists();
+    let has_dl_link = pin_dir.join("enforce_dl_link").exists();
+    let has_ul_link = pin_dir.join("enforce_ul_link").exists();
+    let all_valid = has_dl_prog && has_ul_prog && has_dl_link && has_ul_link;
+
+    if all_valid {
+        println!(
+            "  Pins:       {} ({} files, BPF active)",
+            "active".green().bold(),
+            entries.len()
+        );
+    } else {
+        println!(
+            "  Pins:       {} ({} files, partial — run 'zelynic recover')",
+            "STALE".yellow().bold(),
+            entries.len()
+        );
+    }
+}
+
+#[cfg(not(feature = "ebpf"))]
+fn print_pin_state() {}
 
 use std::path::PathBuf;
 

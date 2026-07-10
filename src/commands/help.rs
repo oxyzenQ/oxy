@@ -54,6 +54,11 @@ pub(crate) fn print_help_all() {
     );
     println!();
     println!(
+        "  {} — Recover from crash (clean orphaned pins)",
+        "zelynic recover".green()
+    );
+    println!();
+    println!(
         "  {} — Show active limits + watchdog status",
         "zelynic status".green()
     );

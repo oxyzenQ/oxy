@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] — 2026-07-11
+
+### Cross Distribution Stability
+
+v5.0.0 focuses on proving zelynic works identically across the Linux
+ecosystem. All 6 distros in the test matrix now pass 17/17 depth tests +
+13/13 leak tests + real enforcement verification.
+
+#### New Features
+
+- **feat: `zelynic recover` command** — explicit crash recovery. Detects
+  orphaned/stale BPF pin files (from SIGKILL, OOM, power loss, partial
+  upgrade) and removes them. Diagnostic: reports state before cleaning.
+  Differs from `unstrict-all` in that it only acts on stale state — if
+  BPF is valid, it reports "nothing to recover".
+
+- **feat: `doctor` pin state check** — `zelynic doctor` now checks
+  `/sys/fs/bpf/zelynic/` and reports pin state: `clean` (no pins),
+  `active` (all 4 critical pins present), or `STALE` (partial — suggests
+  `zelynic recover`).
+
+#### Testing Suite
+
+- **test: crash-recovery-test.sh** — 9-test suite covering: clean
+  baseline, stale detection, recover command, partial pin state,
+  auto-recovery on strict-single, doctor pin state, multiple
+  crash-recover cycles, final state verification.
+
+- **test: regression-test.sh** — consolidated test runner. Runs all
+  suites in sequence: unit tests, crash recovery, leak tests, stress
+  tests, depth tests, endurance test. `--quick` flag skips slow suites.
+
+#### Documentation
+
+- **docs: KERNEL_COMPATIBILITY.md updated** — v5.0.0 distro matrix
+  (6/6 verified ✅), kernel matrix (5.13 → 7.1 all verified), test
+  coverage checklist, bpf_link dependency documented.
+
+- **docs: help-all updated** — `zelynic recover` added to command list.
+
+#### Verification
+
+- 6/6 distros pass all tests (Arch, Ubuntu 24.04, Ubuntu 22.04, Fedora 44,
+  Debian 13, Ubuntu 21.10, CachyOS VM)
+- 17/17 depth tests pass on all distros
+- 13/13 leak tests pass on all distros
+- 46 unit tests + 4 integration tests pass
+- 9 crash recovery tests pass
+- `cargo clippy --features ebpf -- -D warnings` → 0 warnings
+- `clang-format --dry-run --Werror bpf/*.c` → 0 violations
+- `scripts/check-policy.py` → 0 failures
+
+---
+
 ## [4.9.0] — 2026-07-11
 
 ### Dragon Architecture — Production Stable

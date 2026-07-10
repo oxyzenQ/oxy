@@ -147,6 +147,18 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
+        Some(Commands::Recover) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_recover(cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
         Some(Commands::Status) => {
             #[cfg(feature = "ebpf")]
             {
@@ -719,6 +731,60 @@ fn handle_unstrict_all(_verbose: bool) -> Result<()> {
 
     unpin_all_bpf()?;
     eprintln!("All limits removed, no residue.");
+    Ok(())
+}
+
+/// Handle `zelynic recover` — crash recovery cleanup.
+/// Detects orphaned/stale BPF pin files and removes them.
+/// Differs from `unstrict-all` in that it's diagnostic: reports what
+/// it found before cleaning. Safe to run anytime.
+#[cfg(feature = "ebpf")]
+fn handle_recover(verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::{pin_dir_has_files, unpin_all, Limiter};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    eprintln!("━━━ zelynic Crash Recovery ━━━");
+
+    if !pin_dir_has_files() {
+        eprintln!("  State: clean (no pin files found)");
+        eprintln!("  Action: nothing to recover");
+        return Ok(());
+    }
+
+    // Check if state is valid (all 4 critical pins present).
+    let is_valid = Limiter::is_pinned();
+
+    if is_valid {
+        eprintln!("  State: valid (BPF programs + links pinned)");
+        eprintln!("  Action: nothing to recover — use 'unstrict-all' to remove limits");
+        return Ok(());
+    }
+
+    // Stale state detected — count orphaned pins.
+    let pin_dir = std::path::Path::new(crate::ebpf::limiter::PIN_DIR);
+    let pin_count = std::fs::read_dir(pin_dir).map(|d| d.count()).unwrap_or(0);
+
+    eprintln!("  State: STALE ({pin_count} orphaned pin file(s) detected)");
+    eprintln!("  Cause: likely crash, SIGKILL, OOM, or partial upgrade");
+    eprintln!("  Action: removing all pin files...");
+
+    if verbose {
+        if let Ok(entries) = std::fs::read_dir(pin_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    eprintln!("    - {name}");
+                }
+            }
+        }
+    }
+
+    unpin_all()?;
+    eprintln!("  Result: recovered ({pin_count} file(s) removed)");
+    eprintln!("  Next: run 'zelynic strict-single <target> <rate>' to re-apply limits");
     Ok(())
 }
 

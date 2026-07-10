@@ -164,6 +164,14 @@ pub enum Commands {
     #[command(name = "unstrict-all")]
     UnstrictAll,
 
+    /// Recover from crash — clean orphaned BPF pins
+    ///
+    /// If zelynic was killed (SIGKILL, OOM, power loss) mid-operation,
+    /// orphaned pin files may remain. This command detects and removes
+    /// them. Safe to run anytime — does nothing if state is clean.
+    #[command(name = "recover")]
+    Recover,
+
     /// Show active limits and watchdog status
     #[command(name = "status")]
     Status,
