@@ -10,6 +10,8 @@
 #[cfg(feature = "ebpf")]
 pub mod audit;
 #[cfg(feature = "ebpf")]
+pub mod bpf_syscall;
+#[cfg(feature = "ebpf")]
 pub mod identity;
 #[cfg(feature = "ebpf")]
 pub mod limiter;

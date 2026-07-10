@@ -14,25 +14,10 @@ use clap::Parser;
 
 use crate::cli::{Cli, Commands};
 
-/// Pin directory for BPF maps (shared between parent and child).
+// Re-export pin path helpers from limiter module (single source of truth).
 #[cfg(feature = "ebpf")]
-const PIN_DIR: &str = "/sys/fs/bpf/zelynic";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_dl";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_ul";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_GROUP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/group_bucket_dl";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_GROUP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/group_bucket_ul";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
-#[cfg(feature = "ebpf")]
-const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+use crate::ebpf::limiter::{pin_dir_has_files, unpin_all};
+/// Legacy PID file (kept for cleanup of old installations).
 #[cfg(feature = "ebpf")]
 const PID_FILE: &str = "/tmp/zelynic.pid";
 
@@ -241,30 +226,15 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 
 // ━━ Command handlers (ebpf feature) ━━
 
-/// Check if serve child is running.
-/// Remove ALL BPF pin files (programs + links + maps). Full cleanup.
+/// Remove ALL BPF pin files + directory. Full cleanup.
+/// Delegates to `limiter::unpin_all()` which iterates the pin directory
+/// and removes every file, then removes the directory. Also removes the
+/// legacy PID file if present.
 #[cfg(feature = "ebpf")]
 fn unpin_all_bpf() -> Result<()> {
-    // Remove program pins.
-    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl");
-    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul");
-    // Remove link pins (bpf_link pins — keep attachments alive after process exit).
-    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl_link");
-    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul_link");
-    // Remove map pins — all 8 maps are now pinned via LIBBPF_PIN_BY_NAME.
-    let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
-    let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);
-    let _ = std::fs::remove_file(PIN_MAP_WATCHDOG);
-    let _ = std::fs::remove_file(PIN_MAP_STATS);
-    let _ = std::fs::remove_file(PIN_MAP_BUCKET_DL);
-    let _ = std::fs::remove_file(PIN_MAP_BUCKET_UL);
-    let _ = std::fs::remove_file(PIN_MAP_GROUP_BUCKET_DL);
-    let _ = std::fs::remove_file(PIN_MAP_GROUP_BUCKET_UL);
-    // Remove PID file (legacy).
+    unpin_all()?;
+    // Remove legacy PID file if present (from old serve-child versions).
     let _ = std::fs::remove_file(PID_FILE);
-    // Remove pin directory. Use remove_dir_all as a safety net in case any
-    // pin file was missed above (e.g. from a future map addition).
-    let _ = std::fs::remove_dir_all(PIN_DIR);
     Ok(())
 }
 
@@ -766,16 +736,10 @@ fn handle_unstrict_all(_verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    // Check if pin directory exists and has any files. We can't rely solely
-    // on is_pinned() because stale pins from old versions (before link
-    // pinning was added) would fail the 4-file check but still need cleanup.
-    let pin_dir = std::path::Path::new(PIN_DIR);
-    let has_pins = pin_dir.exists()
-        && std::fs::read_dir(pin_dir)
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
-
-    if !has_pins {
+    // Check if pin directory has any files. Can't rely on is_pinned() because
+    // stale pins from old versions (before link pinning) fail the 4-file check
+    // but still need cleanup.
+    if !pin_dir_has_files() {
         eprintln!("No active limits. Nothing to remove.");
         return Ok(());
     }
@@ -797,13 +761,7 @@ fn handle_status(verbose: bool) -> Result<()> {
     // Check if pin directory has any files. is_pinned() requires all 4 pins
     // (2 programs + 2 links), but stale pins from old versions may have
     // partial files. If partial → warn + suggest unstrict-all.
-    let pin_dir = std::path::Path::new(PIN_DIR);
-    let has_pins = pin_dir.exists()
-        && std::fs::read_dir(pin_dir)
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
-
-    if !has_pins {
+    if !pin_dir_has_files() {
         eprintln!("No active limits.");
         return Ok(());
     }
@@ -937,82 +895,4 @@ fn parse_rates(
         download: dl,
         upload: ul,
     })
-}
-
-#[cfg(feature = "ebpf")]
-#[allow(dead_code)]
-fn run_enforcement_loop(
-    limiter: &mut crate::ebpf::limiter::Limiter,
-    watchdog: u64,
-    duration: u64,
-    verbose: bool,
-) {
-    use std::time::{Duration, Instant};
-
-    let start = Instant::now();
-    let stats_interval = Duration::from_secs(1);
-    let mut last_print = Instant::now();
-
-    loop {
-        if let Err(e) = limiter.refresh_watchdog(watchdog) {
-            if verbose {
-                eprintln!("[limiter] WARNING: watchdog refresh failed: {e}");
-            }
-        }
-
-        if last_print.elapsed() >= stats_interval {
-            if verbose {
-                // Verbose: full status table.
-                limiter.print_status();
-            } else {
-                // Quiet: one-line summary.
-                print_compact_status(limiter);
-            }
-            last_print = Instant::now();
-        }
-
-        if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
-            break;
-        }
-
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// Print a compact one-line status (quiet mode).
-#[cfg(feature = "ebpf")]
-#[allow(dead_code)]
-fn print_compact_status(limiter: &crate::ebpf::limiter::Limiter) {
-    use crate::ebpf::limiter::Direction;
-    use std::collections::HashMap;
-
-    let dl_policies = limiter
-        .read_policies_public(Direction::Download)
-        .unwrap_or_default();
-    let ul_policies = limiter
-        .read_policies_public(Direction::Upload)
-        .unwrap_or_default();
-    let stats = limiter.read_stats_public().unwrap_or_default();
-
-    if dl_policies.is_empty() && ul_policies.is_empty() {
-        return;
-    }
-
-    let mut combined: HashMap<u32, (Option<u64>, Option<u64>)> = HashMap::new();
-    for (id, p) in &dl_policies {
-        combined.entry(*id).or_default().0 = Some(p.rate_bps);
-    }
-    for (id, p) in &ul_policies {
-        combined.entry(*id).or_default().1 = Some(p.rate_bps);
-    }
-
-    let total_allowed: u64 = stats.iter().map(|(_, s)| s.bytes_allowed).sum();
-    let total_dropped: u64 = stats.iter().map(|(_, s)| s.bytes_dropped).sum();
-    let active = combined.len();
-
-    eprintln!(
-        "  [{active} limits] allowed: {} | dropped: {}",
-        crate::ebpf::limiter::format_bytes(total_allowed),
-        crate::ebpf::limiter::format_bytes(total_dropped),
-    );
 }

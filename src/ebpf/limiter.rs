@@ -13,9 +13,12 @@ use aya::{
     Ebpf, EbpfLoader,
 };
 use std::fs::File;
-use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
 
+use crate::ebpf::bpf_syscall::{
+    create_and_pin_link, BPF_CGROUP_INET_EGRESS, BPF_CGROUP_INET_INGRESS,
+};
 use crate::ebpf::identity::IdentityMap;
 use crate::ebpf::limiter_types::{
     default_burst, find_bpf_object, monotonic_ns, terminal_width, BucketRaw, BPF_OBJECT_PATH,
@@ -27,113 +30,57 @@ pub use crate::ebpf::limiter_types::{
     RateSpec, Target, MAX_RATE, MIN_RATE,
 };
 
-// ━━ Raw BPF syscall helpers ━━
+// ━━ Pin paths — single source of truth ━━
 //
-// Aya 0.13's CgroupSkb::attach() creates a bpf_link (fd-based) on kernel 5.7+.
-// When the Ebpf object is dropped, Aya closes the link fd → link detached →
-// BPF never executes. Aya does NOT expose a public API to pin CgroupSkb links
-// (CgroupSkbLinkInner is pub(crate)). So we bypass Aya's attach and do it
-// ourselves via raw bpf() syscalls:
-//   1. BPF_LINK_CREATE  — creates a link fd
-//   2. BPF_OBJ_PIN      — pins the link fd to bpffs so it survives process exit
+// All BPF pin file paths are defined here. Other modules (commands/mod.rs)
+// import these constants via `pub use` re-exports. This ensures that adding
+// a new map or program only requires updating ONE location.
 
-/// BPF syscall command numbers (from linux/bpf.h).
-const BPF_LINK_CREATE: i32 = 28;
-const BPF_OBJ_PIN: i32 = 6;
+/// Root pin directory on bpffs.
+pub const PIN_DIR: &str = "/sys/fs/bpf/zelynic";
 
-/// BPF attach types for cgroup_skb (from linux/bpf.h).
-const BPF_CGROUP_INET_INGRESS: u32 = 0;
-const BPF_CGROUP_INET_EGRESS: u32 = 1;
+/// Program pins (BPF programs stay loaded after process exit).
+pub const PIN_PROG_DL: &str = "/sys/fs/bpf/zelynic/enforce_dl";
+pub const PIN_PROG_UL: &str = "/sys/fs/bpf/zelynic/enforce_ul";
 
-/// Attribute struct for BPF_LINK_CREATE.
-/// Layout must match `union bpf_attr` → `struct { prog_fd, target_fd, attach_type, flags }`.
-#[repr(C)]
-struct LinkCreateAttr {
-    prog_fd: u32,
-    target_fd: u32,
-    attach_type: u32,
-    flags: u32,
-    // Remaining fields (target_btf_id, etc.) are zero-filled by the kernel
-    // when attr_size is small. We only need the first 16 bytes for cgroup_skb.
-    _pad: [u8; 40],
+/// Link pins (bpf_links stay attached after process exit).
+pub const PIN_LINK_DL: &str = "/sys/fs/bpf/zelynic/enforce_dl_link";
+pub const PIN_LINK_UL: &str = "/sys/fs/bpf/zelynic/enforce_ul_link";
+
+/// Map pins (all 8 maps are pinned via LIBBPF_PIN_BY_NAME).
+pub const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
+pub const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
+pub const PIN_MAP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_dl";
+pub const PIN_MAP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_ul";
+pub const PIN_MAP_GROUP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/group_bucket_dl";
+pub const PIN_MAP_GROUP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/group_bucket_ul";
+pub const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
+pub const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+
+/// Check if the pin directory has any files.
+/// Used by status/unstrict-all to detect stale partial state.
+pub fn pin_dir_has_files() -> bool {
+    let pin_dir = PathBuf::from(PIN_DIR);
+    pin_dir.exists()
+        && std::fs::read_dir(&pin_dir)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false)
 }
 
-/// Attribute struct for BPF_OBJ_PIN.
-#[repr(C)]
-struct ObjPinAttr {
-    pathname: u64,
-    bpf_fd: u32,
-    file_flags: u32,
-}
-
-/// Create a bpf_link attaching `prog_fd` to `target_fd` (cgroup fd).
-/// Returns the raw link fd on success. Caller owns the fd and must close it.
-fn sys_bpf_link_create(prog_fd: RawFd, target_fd: RawFd, attach_type: u32) -> Result<RawFd> {
-    let attr = LinkCreateAttr {
-        prog_fd: prog_fd as u32,
-        target_fd: target_fd as u32,
-        attach_type,
-        flags: 0,
-        _pad: [0u8; 40],
-    };
-    let ret = unsafe {
-        libc::syscall(
-            libc::SYS_bpf,
-            BPF_LINK_CREATE,
-            &attr as *const _,
-            std::mem::size_of::<LinkCreateAttr>(),
-        )
-    };
-    if ret < 0 {
-        bail!(
-            "BPF_LINK_CREATE failed: {} (attach_type={attach_type})",
-            std::io::Error::last_os_error()
-        );
+/// Remove ALL pin files + directory. Full cleanup.
+/// Iterates the pin directory and removes every file, then removes the
+/// directory itself. Robust against future map/program additions — no
+/// need to update a list when new pins are added.
+pub fn unpin_all() -> Result<()> {
+    let pin_dir = PathBuf::from(PIN_DIR);
+    if pin_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&pin_dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let _ = std::fs::remove_dir(&pin_dir);
     }
-    Ok(ret as RawFd)
-}
-
-/// Pin a BPF object (link or program) fd to a path on bpffs.
-fn sys_bpf_obj_pin(fd: RawFd, path: &str) -> Result<()> {
-    use std::ffi::CString;
-    let path_c = CString::new(path).with_context(|| format!("Invalid pin path: {path}"))?;
-    let attr = ObjPinAttr {
-        pathname: path_c.as_ptr() as u64,
-        bpf_fd: fd as u32,
-        file_flags: 0,
-    };
-    let ret = unsafe {
-        libc::syscall(
-            libc::SYS_bpf,
-            BPF_OBJ_PIN,
-            &attr as *const _,
-            std::mem::size_of::<ObjPinAttr>(),
-        )
-    };
-    if ret < 0 {
-        bail!(
-            "BPF_OBJ_PIN failed for {path}: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-    Ok(())
-}
-
-/// Create a bpf_link, pin it to bpffs, and close the fd.
-/// The link stays attached as long as the pin file exists.
-fn create_and_pin_link(
-    prog_fd: RawFd,
-    cgroup_fd: RawFd,
-    attach_type: u32,
-    link_pin_path: &str,
-) -> Result<()> {
-    // Remove stale pin file if it exists (from a previous crashed run).
-    let _ = std::fs::remove_file(link_pin_path);
-
-    let link_fd = sys_bpf_link_create(prog_fd, cgroup_fd, attach_type)?;
-    sys_bpf_obj_pin(link_fd, link_pin_path)?;
-    // Close the link fd — the pin keeps the link alive in kernel.
-    unsafe { libc::close(link_fd) };
     Ok(())
 }
 
@@ -155,17 +102,11 @@ impl Limiter {
             bail!("cgroup v2 not found at {cgroup_path}");
         }
 
-        // Pin paths for programs + links.
-        let dl_pin = "/sys/fs/bpf/zelynic/enforce_dl";
-        let ul_pin = "/sys/fs/bpf/zelynic/enforce_ul";
-        let dl_link_pin = "/sys/fs/bpf/zelynic/enforce_dl_link";
-        let ul_link_pin = "/sys/fs/bpf/zelynic/enforce_ul_link";
-
         // Check if ALL pins exist (fully operational from previous run).
-        let all_pinned = PathBuf::from(dl_pin).exists()
-            && PathBuf::from(ul_pin).exists()
-            && PathBuf::from(dl_link_pin).exists()
-            && PathBuf::from(ul_link_pin).exists();
+        let all_pinned = PathBuf::from(PIN_PROG_DL).exists()
+            && PathBuf::from(PIN_PROG_UL).exists()
+            && PathBuf::from(PIN_LINK_DL).exists()
+            && PathBuf::from(PIN_LINK_UL).exists();
 
         if all_pinned {
             if verbose {
@@ -176,18 +117,11 @@ impl Limiter {
 
         // If SOME pins exist but not all → stale state from old version or
         // crashed run. Clean up everything before reloading.
-        let pin_dir = PathBuf::from("/sys/fs/bpf/zelynic");
-        if pin_dir.exists() {
+        if pin_dir_has_files() {
             if verbose {
                 eprintln!("[limiter] Stale pin files detected — cleaning up");
             }
-            // Remove all files in the pin directory.
-            if let Ok(entries) = std::fs::read_dir(&pin_dir) {
-                for entry in entries.flatten() {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-            let _ = std::fs::remove_dir(&pin_dir);
+            unpin_all()?;
         }
 
         let obj_path = find_bpf_object()?;
@@ -199,7 +133,7 @@ impl Limiter {
 
         // Create pin directory BEFORE load so maps with LIBBPF_PIN_BY_NAME
         // can be auto-pinned by EbpfLoader.
-        std::fs::create_dir_all("/sys/fs/bpf/zelynic")?;
+        std::fs::create_dir_all(PIN_DIR)?;
 
         // Use EbpfLoader with map_pin_path so all maps declared with
         // __uint(pinning, LIBBPF_PIN_BY_NAME) in limiter.bpf.c are auto-pinned
@@ -207,7 +141,7 @@ impl Limiter {
         // persist across zelynic invocations — without it, maps vanish when
         // the Ebpf object is dropped and open_pinned() hits ENOENT.
         let mut bpf = EbpfLoader::new()
-            .map_pin_path("/sys/fs/bpf/zelynic")
+            .map_pin_path(PIN_DIR)
             .load(&obj_data)
             .context("Failed to load BPF object")?;
 
@@ -219,7 +153,9 @@ impl Limiter {
             .context("BPF program 'enforce_dl' not found")?
             .try_into()?;
         dl_prog.load()?;
-        dl_prog.pin(dl_pin).context("Failed to pin enforce_dl")?;
+        dl_prog
+            .pin(PIN_PROG_DL)
+            .context("Failed to pin enforce_dl")?;
         // Extract the program fd NOW — we need it after the &mut bpf borrow ends.
         let dl_prog_raw = dl_prog
             .fd()
@@ -233,7 +169,9 @@ impl Limiter {
             .context("BPF program 'enforce_ul' not found")?
             .try_into()?;
         ul_prog.load()?;
-        ul_prog.pin(ul_pin).context("Failed to pin enforce_ul")?;
+        ul_prog
+            .pin(PIN_PROG_UL)
+            .context("Failed to pin enforce_ul")?;
         let ul_prog_raw = ul_prog
             .fd()
             .context("Failed to get enforce_ul fd")?
@@ -252,10 +190,10 @@ impl Limiter {
             dl_prog_raw,
             cgroup_raw,
             BPF_CGROUP_INET_INGRESS,
-            dl_link_pin,
+            PIN_LINK_DL,
         )
         .context("Failed to create + pin enforce_dl link")?;
-        create_and_pin_link(ul_prog_raw, cgroup_raw, BPF_CGROUP_INET_EGRESS, ul_link_pin)
+        create_and_pin_link(ul_prog_raw, cgroup_raw, BPF_CGROUP_INET_EGRESS, PIN_LINK_UL)
             .context("Failed to create + pin enforce_ul link")?;
 
         if verbose {
@@ -269,12 +207,13 @@ impl Limiter {
         Ok(())
     }
 
-    /// Check if BPF programs are already pinned (active from previous run).
+    /// Check if BPF programs + links are already pinned (active from previous run).
+    /// Returns true only if ALL 4 pins exist (2 programs + 2 links).
     pub fn is_pinned() -> bool {
-        PathBuf::from("/sys/fs/bpf/zelynic/enforce_dl").exists()
-            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_ul").exists()
-            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_dl_link").exists()
-            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_ul_link").exists()
+        PathBuf::from(PIN_PROG_DL).exists()
+            && PathBuf::from(PIN_PROG_UL).exists()
+            && PathBuf::from(PIN_LINK_DL).exists()
+            && PathBuf::from(PIN_LINK_UL).exists()
     }
 
     /// Apply strict-single: individual policy per cgroup.
@@ -753,7 +692,7 @@ impl Limiter {
             Ok(results)
         } else {
             // Pin mode: read from pinned stats map.
-            let pin_path = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+            let pin_path = PIN_MAP_STATS;
             let map_data =
                 MapData::from_pin(pin_path).map_err(|e| anyhow!("pinned stats map: {e:?}"))?;
             let map_obj = aya::maps::Map::HashMap(map_data);
@@ -770,8 +709,8 @@ impl Limiter {
     /// Get the pin path for a policy map.
     fn pinned_policy_path(&self, direction: Direction) -> String {
         match direction {
-            Direction::Download => "/sys/fs/bpf/zelynic/cgroup_policy_dl".to_string(),
-            Direction::Upload => "/sys/fs/bpf/zelynic/cgroup_policy_ul".to_string(),
+            Direction::Download => PIN_MAP_POLICY_DL.to_string(),
+            Direction::Upload => PIN_MAP_POLICY_UL.to_string(),
         }
     }
 
@@ -850,24 +789,6 @@ impl Limiter {
         Ok(count)
     }
 
-    /// Refresh the watchdog deadline.
-    pub fn refresh_watchdog(&mut self, timeout_secs: u64) -> Result<()> {
-        let bpf = self.bpf.as_mut().context("BPF not loaded")?;
-        let mut watchdog: BpfArray<_, u64> = BpfArray::try_from(
-            bpf.map_mut("watchdog_deadline")
-                .context("watchdog_deadline not found")?,
-        )
-        .context("Failed to access watchdog_deadline")?;
-
-        let now = monotonic_ns();
-        let deadline = now.saturating_add(timeout_secs.saturating_mul(1_000_000_000));
-
-        watchdog
-            .set(0, deadline, 0)
-            .map_err(|e| anyhow!("Failed to refresh watchdog: {e}"))?;
-        Ok(())
-    }
-
     /// Read current watchdog deadline.
     pub fn read_watchdog(&self) -> Result<Option<u64>> {
         if let Some(bpf) = self.bpf.as_ref() {
@@ -884,7 +805,7 @@ impl Limiter {
             }
         } else {
             // Pin mode: read from pinned watchdog map.
-            let pin_path = "/sys/fs/bpf/zelynic/watchdog_deadline";
+            let pin_path = PIN_MAP_WATCHDOG;
             let map_data =
                 MapData::from_pin(pin_path).map_err(|e| anyhow!("pinned watchdog map: {e:?}"))?;
             let map_obj = aya::maps::Map::Array(map_data);
