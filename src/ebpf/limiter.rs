@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use aya::{
     maps::{Array as BpfArray, HashMap as BpfHashMap, MapData},
     programs::{CgroupAttachMode, CgroupSkb, CgroupSkbAttachType},
-    Ebpf,
+    Ebpf, EbpfLoader,
 };
 use std::fs::File;
 use std::path::PathBuf;
@@ -61,11 +61,19 @@ impl Limiter {
         let obj_data = std::fs::read(&obj_path)
             .context(format!("Failed to read BPF object: {}", obj_path.display()))?;
 
-        // Use Ebpf::load with map_pin_path via EbpfLoader.
-        let mut bpf = Ebpf::load(&obj_data).context("Failed to load BPF object")?;
-
-        // Create pin directory.
+        // Create pin directory BEFORE load so maps with LIBBPF_PIN_BY_NAME
+        // can be auto-pinned by EbpfLoader.
         std::fs::create_dir_all("/sys/fs/bpf/zelynic")?;
+
+        // Use EbpfLoader with map_pin_path so all maps declared with
+        // __uint(pinning, LIBBPF_PIN_BY_NAME) in limiter.bpf.c are auto-pinned
+        // to /sys/fs/bpf/zelynic/<map_name>. This is what makes policies
+        // persist across zelynic invocations — without it, maps vanish when
+        // the Ebpf object is dropped and open_pinned() hits ENOENT.
+        let mut bpf = EbpfLoader::new()
+            .map_pin_path("/sys/fs/bpf/zelynic")
+            .load(&obj_data)
+            .context("Failed to load BPF object")?;
 
         // Load + attach + pin download program (ingress).
         let dl_prog: &mut CgroupSkb = bpf

@@ -47,6 +47,7 @@ struct limiter_stats {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct policy);
 } cgroup_policy_dl SEC(".maps");
@@ -54,6 +55,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct bucket);
 } cgroup_bucket_dl SEC(".maps");
@@ -61,6 +63,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 256);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct bucket);
 } group_bucket_dl SEC(".maps");
@@ -70,6 +73,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct policy);
 } cgroup_policy_ul SEC(".maps");
@@ -77,6 +81,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct bucket);
 } cgroup_bucket_ul SEC(".maps");
@@ -84,6 +89,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 256);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct bucket);
 } group_bucket_ul SEC(".maps");
@@ -94,6 +100,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);   // always 0
     __type(value, __u64); // deadline in nanoseconds
 } watchdog_deadline SEC(".maps");
@@ -102,6 +109,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);
     __type(value, struct limiter_stats);
 } cgroup_limiter_stats SEC(".maps");

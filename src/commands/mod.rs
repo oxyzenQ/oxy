@@ -22,6 +22,14 @@ const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
 #[cfg(feature = "ebpf")]
 const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
 #[cfg(feature = "ebpf")]
+const PIN_MAP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_dl";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_ul";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_GROUP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/group_bucket_dl";
+#[cfg(feature = "ebpf")]
+const PIN_MAP_GROUP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/group_bucket_ul";
+#[cfg(feature = "ebpf")]
 const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
 #[cfg(feature = "ebpf")]
 const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
@@ -240,15 +248,20 @@ fn unpin_all_bpf() -> Result<()> {
     // Remove program pins.
     let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl");
     let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul");
-    // Remove map pins.
+    // Remove map pins — all 8 maps are now pinned via LIBBPF_PIN_BY_NAME.
     let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
     let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);
     let _ = std::fs::remove_file(PIN_MAP_WATCHDOG);
     let _ = std::fs::remove_file(PIN_MAP_STATS);
+    let _ = std::fs::remove_file(PIN_MAP_BUCKET_DL);
+    let _ = std::fs::remove_file(PIN_MAP_BUCKET_UL);
+    let _ = std::fs::remove_file(PIN_MAP_GROUP_BUCKET_DL);
+    let _ = std::fs::remove_file(PIN_MAP_GROUP_BUCKET_UL);
     // Remove PID file (legacy).
     let _ = std::fs::remove_file(PID_FILE);
-    // Remove pin directory.
-    let _ = std::fs::remove_dir(PIN_DIR);
+    // Remove pin directory. Use remove_dir_all as a safety net in case any
+    // pin file was missed above (e.g. from a future map addition).
+    let _ = std::fs::remove_dir_all(PIN_DIR);
     Ok(())
 }
 
