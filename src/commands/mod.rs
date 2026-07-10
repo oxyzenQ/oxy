@@ -522,7 +522,7 @@ fn handle_all_limit(
         user_apps.len(),
         rates
             .download
-            .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+            .map(crate::ebpf::limiter::format_rate)
             .unwrap_or_default()
     );
 
@@ -565,11 +565,11 @@ fn handle_all_limit(
 fn print_pin_summary(target_str: &str, rates: &crate::ebpf::limiter::RateSpec, applied: usize) {
     let dl_str = rates
         .download
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .map(crate::ebpf::limiter::format_rate)
         .unwrap_or_default();
     let ul_str = rates
         .upload
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .map(crate::ebpf::limiter::format_rate)
         .unwrap_or_default();
     let parts: Vec<&str> = [
         if !dl_str.is_empty() {
@@ -606,11 +606,11 @@ fn print_summary_line(
 ) {
     let dl_str = rates
         .download
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .map(crate::ebpf::limiter::format_rate)
         .unwrap_or_default();
     let ul_str = rates
         .upload
-        .map(|r| format!("{} /s", crate::ebpf::limiter::format_rate(r)))
+        .map(crate::ebpf::limiter::format_rate)
         .unwrap_or_default();
     let parts: Vec<&str> = [
         if !dl_str.is_empty() {

@@ -333,7 +333,7 @@ impl Limiter {
         if self.verbose {
             if let Some(dl_rate) = rates.download {
                 eprintln!(
-                    "[limiter] {} download → {}/s (shared by {} cgroups)",
+                    "[limiter] {} download → {} (shared by {} cgroups)",
                     group_label,
                     format_rate(dl_rate),
                     all_cgroup_ids.len()
@@ -341,7 +341,7 @@ impl Limiter {
             }
             if let Some(ul_rate) = rates.upload {
                 eprintln!(
-                    "[limiter] {} upload → {}/s (shared by {} cgroups)",
+                    "[limiter] {} upload → {} (shared by {} cgroups)",
                     group_label,
                     format_rate(ul_rate),
                     all_cgroup_ids.len()
@@ -458,12 +458,8 @@ impl Limiter {
             .iter()
             .map(|(cgroup_id, (dl, ul))| {
                 let label = self.identity.label(*cgroup_id);
-                let dl_str = dl
-                    .map(|r| format!("{}/s", format_rate(r)))
-                    .unwrap_or_else(|| "—".to_string());
-                let ul_str = ul
-                    .map(|r| format!("{}/s", format_rate(r)))
-                    .unwrap_or_else(|| "—".to_string());
+                let dl_str = dl.map(format_rate).unwrap_or_else(|| "—".to_string());
+                let ul_str = ul.map(format_rate).unwrap_or_else(|| "—".to_string());
                 let s = stats.iter().find(|(id, _)| id == cgroup_id);
                 let allowed_pkt = s.map(|(_, s)| s.packets_allowed).unwrap_or(0);
                 let dropped_pkt = s.map(|(_, s)| s.packets_dropped).unwrap_or(0);
