@@ -766,13 +766,22 @@ fn handle_unstrict_all(_verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    if !crate::ebpf::limiter::Limiter::is_pinned() {
+    // Check if pin directory exists and has any files. We can't rely solely
+    // on is_pinned() because stale pins from old versions (before link
+    // pinning was added) would fail the 4-file check but still need cleanup.
+    let pin_dir = std::path::Path::new(PIN_DIR);
+    let has_pins = pin_dir.exists()
+        && std::fs::read_dir(pin_dir)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+
+    if !has_pins {
         eprintln!("No active limits. Nothing to remove.");
         return Ok(());
     }
 
     unpin_all_bpf()?;
-    eprintln!("All limits removed, serve child killed, no residue.");
+    eprintln!("All limits removed, no residue.");
     Ok(())
 }
 
@@ -785,8 +794,23 @@ fn handle_status(verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
-    if !crate::ebpf::limiter::Limiter::is_pinned() {
+    // Check if pin directory has any files. is_pinned() requires all 4 pins
+    // (2 programs + 2 links), but stale pins from old versions may have
+    // partial files. If partial → warn + suggest unstrict-all.
+    let pin_dir = std::path::Path::new(PIN_DIR);
+    let has_pins = pin_dir.exists()
+        && std::fs::read_dir(pin_dir)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+
+    if !has_pins {
         eprintln!("No active limits.");
+        return Ok(());
+    }
+
+    if !Limiter::is_pinned() {
+        eprintln!("Stale BPF pin files detected (partial state from old version).");
+        eprintln!("Run 'zelynic unstrict-all' to clean up, then re-apply limits.");
         return Ok(());
     }
 

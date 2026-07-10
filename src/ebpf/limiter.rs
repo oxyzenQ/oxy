@@ -161,16 +161,33 @@ impl Limiter {
         let dl_link_pin = "/sys/fs/bpf/zelynic/enforce_dl_link";
         let ul_link_pin = "/sys/fs/bpf/zelynic/enforce_ul_link";
 
-        // Check if programs already pinned (from previous run).
-        if PathBuf::from(dl_pin).exists()
+        // Check if ALL pins exist (fully operational from previous run).
+        let all_pinned = PathBuf::from(dl_pin).exists()
             && PathBuf::from(ul_pin).exists()
             && PathBuf::from(dl_link_pin).exists()
-            && PathBuf::from(ul_link_pin).exists()
-        {
+            && PathBuf::from(ul_link_pin).exists();
+
+        if all_pinned {
             if verbose {
                 eprintln!("[limiter] BPF programs + links already pinned — reusing");
             }
             return Ok(());
+        }
+
+        // If SOME pins exist but not all → stale state from old version or
+        // crashed run. Clean up everything before reloading.
+        let pin_dir = PathBuf::from("/sys/fs/bpf/zelynic");
+        if pin_dir.exists() {
+            if verbose {
+                eprintln!("[limiter] Stale pin files detected — cleaning up");
+            }
+            // Remove all files in the pin directory.
+            if let Ok(entries) = std::fs::read_dir(&pin_dir) {
+                for entry in entries.flatten() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+            let _ = std::fs::remove_dir(&pin_dir);
         }
 
         let obj_path = find_bpf_object()?;
