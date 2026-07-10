@@ -276,7 +276,12 @@ impl Limiter {
         println!("\n━━━ zelynic Status ━━━");
 
         // Watchdog
+        // deadline == 0 means "no deadline set" → BPF always enforces.
+        // deadline != 0 means fail-safe timeout is active.
         match self.read_watchdog() {
+            Ok(Some(0)) | Ok(None) | Err(_) => {
+                println!("  Watchdog: not set (enforcing)");
+            }
             Ok(Some(deadline)) => {
                 let now = monotonic_ns();
                 if deadline > now {
@@ -286,7 +291,6 @@ impl Limiter {
                     println!("  Watchdog: EXPIRED (BPF is no-op)");
                 }
             }
-            _ => println!("  Watchdog: not set"),
         }
 
         if dl_policies.is_empty() && ul_policies.is_empty() {

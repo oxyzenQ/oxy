@@ -194,11 +194,14 @@ static __always_inline struct bucket *get_bucket(void *map, __u32 key, __u64 bur
 SEC("cgroup_skb/ingress")
 int enforce_dl(struct __sk_buff *skb) {
     // ━━ Watchdog check ━━
+    // deadline == 0 means "no deadline set" → always enforce.
+    // deadline != 0 means "fail-safe timeout" → allow all if expired.
+    // (Preserved for future --timeout feature; serve child refresh removed.)
     __u32 zero = 0;
     __u64 *deadline = bpf_map_lookup_elem(&watchdog_deadline, &zero);
     if (!deadline) return 1;
     __u64 now = bpf_ktime_get_ns();
-    if (now > *deadline) return 1;
+    if (*deadline != 0 && now > *deadline) return 1;
 
     __u64 cgid = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
@@ -227,11 +230,14 @@ int enforce_dl(struct __sk_buff *skb) {
 SEC("cgroup_skb/egress")
 int enforce_ul(struct __sk_buff *skb) {
     // ━━ Watchdog check ━━
+    // deadline == 0 means "no deadline set" → always enforce.
+    // deadline != 0 means "fail-safe timeout" → allow all if expired.
+    // (Preserved for future --timeout feature; serve child refresh removed.)
     __u32 zero = 0;
     __u64 *deadline = bpf_map_lookup_elem(&watchdog_deadline, &zero);
     if (!deadline) return 1;
     __u64 now = bpf_ktime_get_ns();
-    if (now > *deadline) return 1;
+    if (*deadline != 0 && now > *deadline) return 1;
 
     __u64 cgid = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
