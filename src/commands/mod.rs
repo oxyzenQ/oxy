@@ -29,10 +29,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             rate,
             download,
             upload,
-            watchdog,
             allow_dangerous,
             force,
-            duration,
         }) => {
             #[cfg(feature = "ebpf")]
             {
@@ -41,10 +39,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
-                    watchdog,
                     allow_dangerous,
                     force,
-                    duration,
                     cli.verbose,
                 )
             }
@@ -55,10 +51,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     rate,
                     download,
                     upload,
-                    watchdog,
                     allow_dangerous,
                     force,
-                    duration,
                     cli.verbose,
                 );
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
@@ -71,10 +65,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             rate,
             download,
             upload,
-            watchdog,
             allow_dangerous,
             force,
-            duration,
         }) => {
             #[cfg(feature = "ebpf")]
             {
@@ -83,10 +75,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
-                    watchdog,
                     allow_dangerous,
                     force,
-                    duration,
                     cli.verbose,
                 )
             }
@@ -97,10 +87,8 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     rate,
                     download,
                     upload,
-                    watchdog,
                     allow_dangerous,
                     force,
-                    duration,
                     cli.verbose,
                 );
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
@@ -112,7 +100,6 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             rate,
             download,
             upload,
-            watchdog,
             allow_dangerous,
             force,
         }) => {
@@ -122,7 +109,6 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
                     rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
-                    watchdog,
                     allow_dangerous,
                     force,
                     cli.verbose,
@@ -130,15 +116,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
             #[cfg(not(feature = "ebpf"))]
             {
-                let _ = (
-                    rate,
-                    download,
-                    upload,
-                    watchdog,
-                    allow_dangerous,
-                    force,
-                    cli.verbose,
-                );
+                let _ = (rate, download, upload, allow_dangerous, force, cli.verbose);
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
                 Err(anyhow::anyhow!("eBPF feature not enabled"))
             }
@@ -341,10 +319,8 @@ fn handle_strict_single(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
-    _watchdog: u64,
     allow_dangerous: bool,
     force: bool,
-    _duration: u64,
     verbose: bool,
 ) -> Result<()> {
     use crate::ebpf::limiter::{Limiter, Target};
@@ -389,10 +365,8 @@ fn handle_strict_multi(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
-    _watchdog: u64,
     allow_dangerous: bool,
     force: bool,
-    _duration: u64,
     verbose: bool,
 ) -> Result<()> {
     use crate::ebpf::limiter::{Limiter, Target};
@@ -464,7 +438,6 @@ fn handle_all_limit(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
-    _watchdog: u64,
     allow_dangerous: bool,
     force: bool,
     verbose: bool,

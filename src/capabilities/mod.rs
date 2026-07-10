@@ -145,7 +145,7 @@ fn print_report(report: &CapabilityReport) {
     if report.ebpf_supported && report.system.is_root {
         println!();
         println!(
-            "  {} Run `zelynic ebpf observe` or `zelynic ebpf enforce --limit <target>:<rate>`",
+            "  {} Run `zelynic strict-single <target> <rate>` or `zelynic observe`",
             "Ready:".green().bold()
         );
     }

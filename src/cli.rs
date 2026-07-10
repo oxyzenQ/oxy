@@ -48,10 +48,6 @@ pub struct Cli {
     /// Show comprehensive help
     #[arg(long = "help-all", global = false)]
     pub help_all: bool,
-
-    /// [internal] Serve mode — run as background BPF keeper. Do not use directly.
-    #[arg(long = "serve", global = false, hide = true)]
-    pub serve: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -80,10 +76,6 @@ pub enum Commands {
         #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
 
-        /// Watchdog timeout in seconds (default: 30, min: 5)
-        #[arg(long, default_value = "30")]
-        watchdog: u64,
-
         /// Allow rates below 1 kb (dangerous)
         #[arg(long)]
         allow_dangerous: bool,
@@ -91,10 +83,6 @@ pub enum Commands {
         /// Force limit on dangerous/system targets (root, systemd, kthreadd, etc.)
         #[arg(long)]
         force: bool,
-
-        /// Run duration in seconds, then self-exit (default: 5, 0 = until Ctrl+C)
-        #[arg(long, default_value = "5")]
-        duration: u64,
     },
 
     /// Limit multiple apps sharing one rate (group limit)
@@ -122,10 +110,6 @@ pub enum Commands {
         #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
 
-        /// Watchdog timeout in seconds (default: 30, min: 5)
-        #[arg(long, default_value = "30")]
-        watchdog: u64,
-
         /// Allow rates below 1 kb (dangerous)
         #[arg(long)]
         allow_dangerous: bool,
@@ -133,10 +117,6 @@ pub enum Commands {
         /// Force limit on dangerous/system targets (root, systemd, kthreadd, etc.)
         #[arg(long)]
         force: bool,
-
-        /// Run duration in seconds, then self-exit (default: 5, 0 = until Ctrl+C)
-        #[arg(long, default_value = "5")]
-        duration: u64,
     },
 
     /// Limit ALL user apps from list-apps
@@ -161,10 +141,6 @@ pub enum Commands {
         /// Upload rate limit
         #[arg(short = 'u', long = "upload")]
         upload: Option<String>,
-
-        /// Watchdog timeout in seconds (default: 30, min: 5)
-        #[arg(long, default_value = "30")]
-        watchdog: u64,
 
         /// Allow rates below 1 kb (dangerous)
         #[arg(long)]

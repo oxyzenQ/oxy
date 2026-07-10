@@ -33,7 +33,7 @@ pub fn print_observer_status() {
 
     if support.supported {
         println!("  Observer: {}", "READY".green().bold());
-        println!("  Usage: sudo zelynic ebpf observe");
+        println!("  Usage: sudo zelynic observe");
     } else {
         println!("  Observer: {}", "NOT AVAILABLE".red().bold());
         println!("  Install: clang, libbpf-dev, then rebuild with --features ebpf");
