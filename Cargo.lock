@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "zelynic"
-version = "4.0.1"
+version = "4.9.0"
 dependencies = [
  "anyhow",
  "aya",

@@ -5,7 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.9.0] — 2026-07-11
+
+### Dragon Architecture — Production Stable
+
+Final release of the v4.x series before the v5.0.0 cross-distribution
+stability push. Pure eBPF enforcement is now production-verified with
+high precision, clean schema migration, and a simplified CLI surface.
+
+#### Critical Bug Fixes
+
+- **fix: BPF map pinning via LIBBPF_PIN_BY_NAME + EbpfLoader** — maps
+  were not pinned, causing `BPF_OBJ_GET ... NotFound` on `strict-single`.
+  Root cause: `Ebpf::load()` does not pin maps; switched to
+  `EbpfLoader::new().map_pin_path(...).load()`.
+- **fix: watchdog deadline=0 made BPF permanently no-op** — serve child
+  removal left watchdog check active with deadline=0 (always expired).
+  Changed BPF: `if (*deadline != 0 && now > *deadline) return 1;`
+- **fix: pin bpf_links via raw syscalls** — Aya 0.13's `CgroupSkb::attach()`
+  creates fd-based links that detach on `drop(bpf)`. Added raw
+  `BPF_LINK_CREATE` + `BPF_OBJ_PIN` syscalls to pin links so enforcement
+  survives process exit.
+- **fix: handle stale pin files from old version** — partial pin state
+  (from v4.0.x without link pins) caused EEXIST crash. Now `attach()`
+  auto-detects stale state and cleans up before reload.
+- **fix: parse_rate overflow detection** — `100000000000000000kb` returned
+  `u64::MAX` via `saturating_mul`, showing `18446744073709551615`. Switched
+  to `checked_mul` with friendly "Warning:" message showing original input.
+- **fix: double /s suffix in rate display** — `format_rate()` already adds
+  `/s` but 7 call sites added another, producing `100.0 KB/s/s`.
+
+#### High Precision
+
+- **feat: fractional token tracking** — added `frac_rem` field to bucket
+  struct. Eliminates ~0.7% rate error from integer division truncation.
+  Before: 97,700 bps target → 97,000 actual (0.72% error).
+  After: 97,700 bps target → 97,700 actual (0.00% error).
+- **feat: decimal SI units** — `format_bytes` now uses 1 KB = 1000 bytes
+  (was 1024). Consistent with `parse_rate` and network rate conventions.
+  `100kb` input → `100.0 KB/s` output (was `97.7 KB/s`).
+- **feat: format_rate with /s suffix** — separate from `format_bytes`.
+
+#### Schema Migration
+
+- **feat: schema_version map** — added `BPF_MAP_TYPE_ARRAY` map +
+  `SCHEMA_VERSION=2` in BPF. Userspace writes version on load, checks
+  on attach. If mismatch → auto cleanup + reload. Safe migration path
+  for future struct layout changes.
+- **feat: BucketRaw schema v2** — added `frac_rem: u64` (24 bytes, was 16).
+
+#### Foundation Strengthening
+
+- **refactor: extract bpf_syscall.rs module** — raw syscall helpers moved
+  out of `limiter.rs` into dedicated `src/ebpf/bpf_syscall.rs` (165 lines).
+  `sys_bpf_link_create()`, `sys_bpf_obj_pin()`, `create_and_pin_link()`.
+- **refactor: centralize all pin paths** — 12 pin path constants now in
+  `limiter.rs` as `pub const`. Single source of truth, eliminates duplication.
+- **refactor: simplify cleanup** — `unpin_all()` iterates pin dir + removes
+  all files + dir. Robust against future map/program additions.
+- **refactor: remove dead code (~100 lines)** — `run_enforcement_loop()`,
+  `print_compact_status()`, `Limiter::refresh_watchdog()` (all dead since
+  serve child removal).
+
+#### CLI Simplification
+
+- **refactor: remove dead flags** — `--serve`, `--watchdog`, `--duration`
+  removed (dead since serve child deletion in 31f6058).
+- **fix: doctor output legacy refs** — `zelynic ebpf observe` → `zelynic
+  observe`, `zelynic ebpf enforce --limit` → `zelynic strict-single`.
+- **fix: --help-all syntax** — `-up` → `-u`, `100KB/s` → `100kb`,
+  `--watchdog 60` removed, lowercase only, format rate consistent.
+- **fix: main.rs error prefix** — Rust default `Error:` → `zelynic:` for
+  system errors, `Warning:` preserved for user-input warnings.
+
+#### Documentation
+
+- **docs: add Philosophy section to README** — public product identity:
+  "Stable, strong, boring, easy maintenance, silent but killer."
+  What zelynic IS (✅) and will NEVER be (❌ TUI, systemd, config.toml,
+  daemon, REST API, Windows).
+- **security: remove ROADMAP.md from public repo** — strategic direction
+  moved to private file to prevent intel leak.
+
+#### Verification
+
+- 46 unit tests pass (was 37, +9 precision + overflow tests)
+- 4 integration tests pass
+- `cargo clippy --features ebpf -- -D warnings` → 0 warnings
+- `clang-format --dry-run --Werror bpf/*.c` → 0 violations
+- `scripts/check-policy.py` → 0 failures
+- LOC: all files under 1300 policy limit
+
+---
 
 ### Dragon Architecture — v4.0.0-alpha Milestone
 
