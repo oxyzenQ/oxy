@@ -5,13 +5,13 @@
 //
 // Build: clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
 
-#include <bpf/bpf_endian.h>
-#include <bpf/bpf_helpers.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
 #define EVENT_PACKET 1
 

@@ -16,5 +16,5 @@ BreakBeforeBraces: Attach
 AllowShortIfStatementsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: false
 AllowShortBlocksOnASingleLine: false
-SortIncludes: true
-IncludeBlocks: Regroup
+SortIncludes: false
+IncludeBlocks: Preserve

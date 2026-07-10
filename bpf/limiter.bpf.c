@@ -16,8 +16,8 @@
 //
 // Build: clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
 
-#include <bpf/bpf_helpers.h>
 #include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
 
 /// Per-cgroup policy. Written by userspace.
 /// group_id == 0 means "individual" (use cgroup_bucket).
