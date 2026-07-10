@@ -124,6 +124,9 @@ pub fn find_bpf_object() -> Result<PathBuf> {
 }
 
 /// Parse a rate string. Lowercase units only: kb, mb, gb, b.
+///
+/// Returns the rate in bytes per second. On overflow (input too large for u64),
+/// returns an error with the original input shown — not the wrapped value.
 pub fn parse_rate(s: &str) -> Result<u64> {
     let s = s.trim();
 
@@ -151,7 +154,14 @@ pub fn parse_rate(s: &str) -> Result<u64> {
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid number in rate '{}': {}", s, e))?;
 
-    Ok(n.saturating_mul(multiplier))
+    // Use checked_mul to detect overflow. saturating_mul would return u64::MAX
+    // which is misleading (user sees 18446744073709551615 instead of their input).
+    match n.checked_mul(multiplier) {
+        Some(result) => Ok(result),
+        None => bail!(
+            "Warning: rate '{s}' is too large (overflow). Maximum is 1gb (1,000,000,000 b/s)."
+        ),
+    }
 }
 
 /// Validate rate is within bounds.
@@ -282,6 +292,39 @@ mod tests {
         assert!(parse_rate("abc").is_err());
         assert!(parse_rate("1xb").is_err());
         assert!(parse_rate("").is_err());
+    }
+
+    #[test]
+    fn test_parse_rate_overflow_detects_and_shows_input() {
+        // 1e17 × 1000 = 1e20, overflows u64 (max ~1.8e19).
+        // Must return Err, NOT saturate to u64::MAX.
+        let result = parse_rate("100000000000000000kb");
+        assert!(result.is_err());
+
+        let err_msg = format!("{}", result.unwrap_err());
+        // Error must show the original input, not the wrapped u64::MAX value.
+        assert!(
+            err_msg.contains("100000000000000000kb"),
+            "error should show original input, got: {err_msg}"
+        );
+        // Must say "Warning:" not be a raw overflow.
+        assert!(
+            err_msg.starts_with("Warning:"),
+            "error should start with 'Warning:', got: {err_msg}"
+        );
+        // Must NOT show the wrapped u64::MAX value.
+        assert!(
+            !err_msg.contains("18446744073709551615"),
+            "error must not show u64::MAX wrapped value, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_rate_max_gb_does_not_overflow() {
+        // 1gb = 1e9, should parse fine.
+        assert_eq!(parse_rate("1gb").unwrap(), 1_000_000_000);
+        // 1000gb = 1e12, still fits u64.
+        assert_eq!(parse_rate("1000gb").unwrap(), 1_000_000_000_000);
     }
 
     #[test]

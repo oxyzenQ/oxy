@@ -16,7 +16,21 @@ use clap::Parser;
 
 use cli::Cli;
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(e) = try_main() {
+        // Print error without the default "Error:" prefix from Rust runtime.
+        // If the error message already starts with "Warning:", keep it as-is.
+        let msg = format!("{e}");
+        if msg.starts_with("Warning:") || msg.starts_with("warning:") {
+            eprintln!("{msg}");
+        } else {
+            eprintln!("zelynic: {msg}");
+        }
+        std::process::exit(1);
+    }
+}
+
+fn try_main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.help_all {
