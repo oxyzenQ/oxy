@@ -16,16 +16,16 @@
 //
 // Build: clang -O2 -g -target bpf -c bpf/limiter.bpf.c -o bpf/limiter.bpf.o
 
-#include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <linux/bpf.h>
 
 /// Per-cgroup policy. Written by userspace.
 /// group_id == 0 means "individual" (use cgroup_bucket).
 /// group_id != 0 means "shared group" (use group_bucket).
 struct policy {
-    __u64 rate_bps;       // refill rate in bytes per second
-    __u64 burst_bytes;    // maximum burst size in bytes
-    __u32 group_id;       // 0 = individual, N = shared group
+    __u64 rate_bps;    // refill rate in bytes per second
+    __u64 burst_bytes; // maximum burst size in bytes
+    __u32 group_id;    // 0 = individual, N = shared group
 };
 
 /// Token bucket state. Updated by BPF on every packet.
@@ -119,8 +119,8 @@ struct {
 /// Refill tokens and enforce. Returns 1 (allow) or 0 (drop).
 /// `pol` is the policy. `bkt` is the bucket (individual or group).
 static __always_inline int enforce(struct policy *pol, struct bucket *bkt,
-                                    __u32 pkt_len, __u64 now,
-                                    struct limiter_stats *stats) {
+                                   __u32 pkt_len, __u64 now,
+                                   struct limiter_stats *stats) {
     // Refill tokens based on elapsed time.
     __u64 elapsed;
     if (now > bkt->last_refill_ns) {
@@ -168,7 +168,8 @@ static __always_inline int enforce(struct policy *pol, struct bucket *bkt,
 
 /// Get or create stats entry for a cgroup.
 static __always_inline struct limiter_stats *get_stats(__u32 cgroup_id) {
-    struct limiter_stats *stats = bpf_map_lookup_elem(&cgroup_limiter_stats, &cgroup_id);
+    struct limiter_stats *stats =
+        bpf_map_lookup_elem(&cgroup_limiter_stats, &cgroup_id);
     if (!stats) {
         struct limiter_stats init = {};
         bpf_map_update_elem(&cgroup_limiter_stats, &cgroup_id, &init, BPF_ANY);
@@ -177,12 +178,14 @@ static __always_inline struct limiter_stats *get_stats(__u32 cgroup_id) {
     return stats;
 }
 
-/// Get or create bucket. `map` is the bucket map, `key` is cgroup_id or group_id.
-static __always_inline struct bucket *get_bucket(void *map, __u32 key, __u64 burst, __u64 now) {
+/// Get or create bucket. `map` is the bucket map, `key` is cgroup_id or
+/// group_id.
+static __always_inline struct bucket *get_bucket(void *map, __u32 key,
+                                                 __u64 burst, __u64 now) {
     struct bucket *bkt = bpf_map_lookup_elem(map, &key);
     if (!bkt) {
-        struct bucket init = {};
-        init.tokens = burst;
+        struct bucket init  = {};
+        init.tokens         = burst;
         init.last_refill_ns = now;
         bpf_map_update_elem(map, &key, &init, BPF_ANY);
         bkt = bpf_map_lookup_elem(map, &key);
@@ -197,31 +200,39 @@ int enforce_dl(struct __sk_buff *skb) {
     // deadline == 0 means "no deadline set" → always enforce.
     // deadline != 0 means "fail-safe timeout" → allow all if expired.
     // (Preserved for future --timeout feature; serve child refresh removed.)
-    __u32 zero = 0;
+    __u32 zero      = 0;
     __u64 *deadline = bpf_map_lookup_elem(&watchdog_deadline, &zero);
-    if (!deadline) return 1;
+    if (!deadline)
+        return 1;
     __u64 now = bpf_ktime_get_ns();
-    if (*deadline != 0 && now > *deadline) return 1;
+    if (*deadline != 0 && now > *deadline)
+        return 1;
 
-    __u64 cgid = bpf_skb_cgroup_id(skb);
+    __u64 cgid      = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
-    __u32 pkt_len = skb->len;
+    __u32 pkt_len   = skb->len;
 
     // Look up download policy.
     struct policy *pol = bpf_map_lookup_elem(&cgroup_policy_dl, &cgroup_id);
-    if (!pol) return 1;
-    if (pol->rate_bps == 0) return 1;
+    if (!pol)
+        return 1;
+    if (pol->rate_bps == 0)
+        return 1;
 
     struct limiter_stats *stats = get_stats(cgroup_id);
 
     // Individual or group bucket?
     if (pol->group_id != 0) {
-        struct bucket *bkt = get_bucket(&group_bucket_dl, pol->group_id, pol->burst_bytes, now);
-        if (!bkt) return 1;
+        struct bucket *bkt =
+            get_bucket(&group_bucket_dl, pol->group_id, pol->burst_bytes, now);
+        if (!bkt)
+            return 1;
         return enforce(pol, bkt, pkt_len, now, stats);
     } else {
-        struct bucket *bkt = get_bucket(&cgroup_bucket_dl, cgroup_id, pol->burst_bytes, now);
-        if (!bkt) return 1;
+        struct bucket *bkt =
+            get_bucket(&cgroup_bucket_dl, cgroup_id, pol->burst_bytes, now);
+        if (!bkt)
+            return 1;
         return enforce(pol, bkt, pkt_len, now, stats);
     }
 }
@@ -233,31 +244,39 @@ int enforce_ul(struct __sk_buff *skb) {
     // deadline == 0 means "no deadline set" → always enforce.
     // deadline != 0 means "fail-safe timeout" → allow all if expired.
     // (Preserved for future --timeout feature; serve child refresh removed.)
-    __u32 zero = 0;
+    __u32 zero      = 0;
     __u64 *deadline = bpf_map_lookup_elem(&watchdog_deadline, &zero);
-    if (!deadline) return 1;
+    if (!deadline)
+        return 1;
     __u64 now = bpf_ktime_get_ns();
-    if (*deadline != 0 && now > *deadline) return 1;
+    if (*deadline != 0 && now > *deadline)
+        return 1;
 
-    __u64 cgid = bpf_skb_cgroup_id(skb);
+    __u64 cgid      = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
-    __u32 pkt_len = skb->len;
+    __u32 pkt_len   = skb->len;
 
     // Look up upload policy.
     struct policy *pol = bpf_map_lookup_elem(&cgroup_policy_ul, &cgroup_id);
-    if (!pol) return 1;
-    if (pol->rate_bps == 0) return 1;
+    if (!pol)
+        return 1;
+    if (pol->rate_bps == 0)
+        return 1;
 
     struct limiter_stats *stats = get_stats(cgroup_id);
 
     // Individual or group bucket?
     if (pol->group_id != 0) {
-        struct bucket *bkt = get_bucket(&group_bucket_ul, pol->group_id, pol->burst_bytes, now);
-        if (!bkt) return 1;
+        struct bucket *bkt =
+            get_bucket(&group_bucket_ul, pol->group_id, pol->burst_bytes, now);
+        if (!bkt)
+            return 1;
         return enforce(pol, bkt, pkt_len, now, stats);
     } else {
-        struct bucket *bkt = get_bucket(&cgroup_bucket_ul, cgroup_id, pol->burst_bytes, now);
-        if (!bkt) return 1;
+        struct bucket *bkt =
+            get_bucket(&cgroup_bucket_ul, cgroup_id, pol->burst_bytes, now);
+        if (!bkt)
+            return 1;
         return enforce(pol, bkt, pkt_len, now, stats);
     }
 }

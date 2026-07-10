@@ -5,13 +5,13 @@
 //
 // Build: clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
 
+#include <bpf/bpf_endian.h>
+#include <bpf/bpf_helpers.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
 
 #define EVENT_PACKET 1
 
@@ -52,25 +52,27 @@ struct {
 
 SEC("cgroup_skb/egress")
 int observe_egress(struct __sk_buff *skb) {
-    __u64 cgid = bpf_skb_cgroup_id(skb);
+    __u64 cgid      = bpf_skb_cgroup_id(skb);
     __u32 cgroup_id = (__u32)cgid;
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 pid = pid_tgid >> 32;
-    __u32 uid = bpf_get_current_uid_gid();
-    __u32 pkt_len = skb->len;
+    __u64 pid_tgid  = bpf_get_current_pid_tgid();
+    __u32 pid       = pid_tgid >> 32;
+    __u32 uid       = bpf_get_current_uid_gid();
+    __u32 pkt_len   = skb->len;
 
     // Update counters — use BPF_ANY to create if missing
-    struct cgroup_stats *stats = bpf_map_lookup_elem(&cgroup_counters, &cgroup_id);
+    struct cgroup_stats *stats =
+        bpf_map_lookup_elem(&cgroup_counters, &cgroup_id);
     if (stats) {
         stats->packets += 1;
         stats->bytes += pkt_len;
     } else {
         struct cgroup_stats init = {};
-        init.packets = 1;
-        init.bytes = pkt_len;
+        init.packets             = 1;
+        init.bytes               = pkt_len;
         bpf_map_update_elem(&cgroup_counters, &cgroup_id, &init, BPF_ANY);
         stats = bpf_map_lookup_elem(&cgroup_counters, &cgroup_id);
-        if (!stats) return 1;
+        if (!stats)
+            return 1;
     }
 
     // Throttle: emit 1 event per 100 packets per cgroup
@@ -86,13 +88,14 @@ int observe_egress(struct __sk_buff *skb) {
     __u16 src_port = 0, dst_port = 0;
 
     if (skb->protocol == bpf_htons(ETH_P_IP)) {
-        void *data_end = (void *)(long)skb->data_end;
+        void *data_end    = (void *)(long)skb->data_end;
         struct iphdr *iph = (void *)(long)skb->data;
-        if ((void *)(iph + 1) > data_end) return 1;
+        if ((void *)(iph + 1) > data_end)
+            return 1;
 
         protocol = iph->protocol;
-        src_ip = iph->saddr;
-        dst_ip = iph->daddr;
+        src_ip   = iph->saddr;
+        dst_ip   = iph->daddr;
 
         if (protocol == 6 || protocol == 17) {
             void *transport = (void *)(iph + 1);
@@ -114,19 +117,20 @@ int observe_egress(struct __sk_buff *skb) {
 
     // Emit event
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e) return 1;
+    if (!e)
+        return 1;
 
     e->event_type = EVENT_PACKET;
-    e->cgroup_id = cgroup_id;
-    e->pid = pid;
-    e->uid = uid;
-    e->protocol = protocol;
-    e->direction = 0;
-    e->pkt_len = pkt_len;
-    e->src_ip = src_ip;
-    e->dst_ip = dst_ip;
-    e->src_port = src_port;
-    e->dst_port = dst_port;
+    e->cgroup_id  = cgroup_id;
+    e->pid        = pid;
+    e->uid        = uid;
+    e->protocol   = protocol;
+    e->direction  = 0;
+    e->pkt_len    = pkt_len;
+    e->src_ip     = src_ip;
+    e->dst_ip     = dst_ip;
+    e->src_port   = src_port;
+    e->dst_port   = dst_port;
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     bpf_ringbuf_submit(e, 0);
 
