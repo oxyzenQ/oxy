@@ -242,12 +242,15 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
 // ━━ Command handlers (ebpf feature) ━━
 
 /// Check if serve child is running.
-/// Remove ALL BPF pin files (programs + maps). Full cleanup.
+/// Remove ALL BPF pin files (programs + links + maps). Full cleanup.
 #[cfg(feature = "ebpf")]
 fn unpin_all_bpf() -> Result<()> {
     // Remove program pins.
     let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl");
     let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul");
+    // Remove link pins (bpf_link pins — keep attachments alive after process exit).
+    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_dl_link");
+    let _ = std::fs::remove_file("/sys/fs/bpf/zelynic/enforce_ul_link");
     // Remove map pins — all 8 maps are now pinned via LIBBPF_PIN_BY_NAME.
     let _ = std::fs::remove_file(PIN_MAP_POLICY_DL);
     let _ = std::fs::remove_file(PIN_MAP_POLICY_UL);

@@ -9,10 +9,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use aya::{
     maps::{Array as BpfArray, HashMap as BpfHashMap, MapData},
-    programs::{CgroupAttachMode, CgroupSkb, CgroupSkbAttachType},
+    programs::CgroupSkb,
     Ebpf, EbpfLoader,
 };
 use std::fs::File;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::path::PathBuf;
 
 use crate::ebpf::identity::IdentityMap;
@@ -26,6 +27,116 @@ pub use crate::ebpf::limiter_types::{
     RateSpec, Target, MAX_RATE, MIN_RATE,
 };
 
+// ━━ Raw BPF syscall helpers ━━
+//
+// Aya 0.13's CgroupSkb::attach() creates a bpf_link (fd-based) on kernel 5.7+.
+// When the Ebpf object is dropped, Aya closes the link fd → link detached →
+// BPF never executes. Aya does NOT expose a public API to pin CgroupSkb links
+// (CgroupSkbLinkInner is pub(crate)). So we bypass Aya's attach and do it
+// ourselves via raw bpf() syscalls:
+//   1. BPF_LINK_CREATE  — creates a link fd
+//   2. BPF_OBJ_PIN      — pins the link fd to bpffs so it survives process exit
+
+/// BPF syscall command numbers (from linux/bpf.h).
+const BPF_LINK_CREATE: i32 = 28;
+const BPF_OBJ_PIN: i32 = 6;
+
+/// BPF attach types for cgroup_skb (from linux/bpf.h).
+const BPF_CGROUP_INET_INGRESS: u32 = 0;
+const BPF_CGROUP_INET_EGRESS: u32 = 1;
+
+/// Attribute struct for BPF_LINK_CREATE.
+/// Layout must match `union bpf_attr` → `struct { prog_fd, target_fd, attach_type, flags }`.
+#[repr(C)]
+struct LinkCreateAttr {
+    prog_fd: u32,
+    target_fd: u32,
+    attach_type: u32,
+    flags: u32,
+    // Remaining fields (target_btf_id, etc.) are zero-filled by the kernel
+    // when attr_size is small. We only need the first 16 bytes for cgroup_skb.
+    _pad: [u8; 40],
+}
+
+/// Attribute struct for BPF_OBJ_PIN.
+#[repr(C)]
+struct ObjPinAttr {
+    pathname: u64,
+    bpf_fd: u32,
+    file_flags: u32,
+}
+
+/// Create a bpf_link attaching `prog_fd` to `target_fd` (cgroup fd).
+/// Returns the raw link fd on success. Caller owns the fd and must close it.
+fn sys_bpf_link_create(prog_fd: RawFd, target_fd: RawFd, attach_type: u32) -> Result<RawFd> {
+    let attr = LinkCreateAttr {
+        prog_fd: prog_fd as u32,
+        target_fd: target_fd as u32,
+        attach_type,
+        flags: 0,
+        _pad: [0u8; 40],
+    };
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_LINK_CREATE,
+            &attr as *const _,
+            std::mem::size_of::<LinkCreateAttr>(),
+        )
+    };
+    if ret < 0 {
+        bail!(
+            "BPF_LINK_CREATE failed: {} (attach_type={attach_type})",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(ret as RawFd)
+}
+
+/// Pin a BPF object (link or program) fd to a path on bpffs.
+fn sys_bpf_obj_pin(fd: RawFd, path: &str) -> Result<()> {
+    use std::ffi::CString;
+    let path_c = CString::new(path).with_context(|| format!("Invalid pin path: {path}"))?;
+    let attr = ObjPinAttr {
+        pathname: path_c.as_ptr() as u64,
+        bpf_fd: fd as u32,
+        file_flags: 0,
+    };
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_OBJ_PIN,
+            &attr as *const _,
+            std::mem::size_of::<ObjPinAttr>(),
+        )
+    };
+    if ret < 0 {
+        bail!(
+            "BPF_OBJ_PIN failed for {path}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(())
+}
+
+/// Create a bpf_link, pin it to bpffs, and close the fd.
+/// The link stays attached as long as the pin file exists.
+fn create_and_pin_link(
+    prog_fd: RawFd,
+    cgroup_fd: RawFd,
+    attach_type: u32,
+    link_pin_path: &str,
+) -> Result<()> {
+    // Remove stale pin file if it exists (from a previous crashed run).
+    let _ = std::fs::remove_file(link_pin_path);
+
+    let link_fd = sys_bpf_link_create(prog_fd, cgroup_fd, attach_type)?;
+    sys_bpf_obj_pin(link_fd, link_pin_path)?;
+    // Close the link fd — the pin keeps the link alive in kernel.
+    unsafe { libc::close(link_fd) };
+    Ok(())
+}
+
 // ━━ Limiter struct ━━
 
 pub struct Limiter {
@@ -37,19 +148,27 @@ pub struct Limiter {
 
 impl Limiter {
     /// Load limiter BPF object and attach to cgroup v2 root (both ingress + egress).
-    /// Programs are pinned to /sys/fs/bpf/zelynic/ so they survive process exit.
+    /// Programs AND links are pinned to /sys/fs/bpf/zelynic/ so they survive process exit.
     pub fn attach(verbose: bool) -> Result<()> {
         let cgroup_path = "/sys/fs/cgroup";
         if !PathBuf::from(cgroup_path).exists() {
             bail!("cgroup v2 not found at {cgroup_path}");
         }
 
-        // Check if programs already pinned (from previous run).
+        // Pin paths for programs + links.
         let dl_pin = "/sys/fs/bpf/zelynic/enforce_dl";
         let ul_pin = "/sys/fs/bpf/zelynic/enforce_ul";
-        if PathBuf::from(dl_pin).exists() && PathBuf::from(ul_pin).exists() {
+        let dl_link_pin = "/sys/fs/bpf/zelynic/enforce_dl_link";
+        let ul_link_pin = "/sys/fs/bpf/zelynic/enforce_ul_link";
+
+        // Check if programs already pinned (from previous run).
+        if PathBuf::from(dl_pin).exists()
+            && PathBuf::from(ul_pin).exists()
+            && PathBuf::from(dl_link_pin).exists()
+            && PathBuf::from(ul_link_pin).exists()
+        {
             if verbose {
-                eprintln!("[limiter] BPF programs already pinned — reusing");
+                eprintln!("[limiter] BPF programs + links already pinned — reusing");
             }
             return Ok(());
         }
@@ -75,49 +194,60 @@ impl Limiter {
             .load(&obj_data)
             .context("Failed to load BPF object")?;
 
-        // Load + attach + pin download program (ingress).
+        // Load + pin download program (ingress). Do NOT call prog.attach() —
+        // Aya 0.13's attach creates a bpf_link that gets detached on drop.
+        // We create + pin the link ourselves via raw bpf() syscalls.
         let dl_prog: &mut CgroupSkb = bpf
             .program_mut("enforce_dl")
             .context("BPF program 'enforce_dl' not found")?
             .try_into()?;
         dl_prog.load()?;
-
-        let cgroup_file =
-            File::open(cgroup_path).context("Failed to open cgroup root directory")?;
-
-        dl_prog
-            .attach(
-                cgroup_file.try_clone()?,
-                CgroupSkbAttachType::Ingress,
-                CgroupAttachMode::default(),
-            )
-            .context("Failed to attach enforce_dl (ingress)")?;
-
-        // Pin the program so it survives process exit.
         dl_prog.pin(dl_pin).context("Failed to pin enforce_dl")?;
+        // Extract the program fd NOW — we need it after the &mut bpf borrow ends.
+        let dl_prog_raw = dl_prog
+            .fd()
+            .context("Failed to get enforce_dl fd")?
+            .as_fd()
+            .as_raw_fd();
 
-        // Load + attach + pin upload program (egress).
+        // Load + pin upload program (egress).
         let ul_prog: &mut CgroupSkb = bpf
             .program_mut("enforce_ul")
             .context("BPF program 'enforce_ul' not found")?
             .try_into()?;
         ul_prog.load()?;
-
-        ul_prog
-            .attach(
-                cgroup_file,
-                CgroupSkbAttachType::Egress,
-                CgroupAttachMode::default(),
-            )
-            .context("Failed to attach enforce_ul (egress)")?;
-
         ul_prog.pin(ul_pin).context("Failed to pin enforce_ul")?;
+        let ul_prog_raw = ul_prog
+            .fd()
+            .context("Failed to get enforce_ul fd")?
+            .as_fd()
+            .as_raw_fd();
+
+        // Open cgroup root for BPF_LINK_CREATE target_fd.
+        let cgroup_file =
+            File::open(cgroup_path).context("Failed to open cgroup root directory")?;
+        let cgroup_raw = cgroup_file.as_raw_fd();
+
+        // Create + pin links. The link fd is closed after pinning, but the
+        // pin keeps the link alive in kernel → BPF stays attached after
+        // process exit.
+        create_and_pin_link(
+            dl_prog_raw,
+            cgroup_raw,
+            BPF_CGROUP_INET_INGRESS,
+            dl_link_pin,
+        )
+        .context("Failed to create + pin enforce_dl link")?;
+        create_and_pin_link(ul_prog_raw, cgroup_raw, BPF_CGROUP_INET_EGRESS, ul_link_pin)
+            .context("Failed to create + pin enforce_ul link")?;
 
         if verbose {
             eprintln!("[limiter] Attached + pinned to {cgroup_path} (ingress + egress)");
         }
 
-        // Drop Ebpf object — programs stay loaded because pinned.
+        // Drop Ebpf object — programs stay loaded because pinned, links stay
+        // attached because pinned. Maps stay loaded because pinned via
+        // LIBBPF_PIN_BY_NAME.
         drop(bpf);
         Ok(())
     }
@@ -126,6 +256,8 @@ impl Limiter {
     pub fn is_pinned() -> bool {
         PathBuf::from("/sys/fs/bpf/zelynic/enforce_dl").exists()
             && PathBuf::from("/sys/fs/bpf/zelynic/enforce_ul").exists()
+            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_dl_link").exists()
+            && PathBuf::from("/sys/fs/bpf/zelynic/enforce_ul_link").exists()
     }
 
     /// Apply strict-single: individual policy per cgroup.
