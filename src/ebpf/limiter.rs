@@ -22,6 +22,7 @@ use crate::ebpf::bpf_syscall::{
 use crate::ebpf::identity::IdentityMap;
 use crate::ebpf::limiter_types::{
     default_burst, find_bpf_object, monotonic_ns, terminal_width, BucketRaw, BPF_OBJECT_PATH,
+    SCHEMA_VERSION_EXPECTED,
 };
 
 // Re-export public types/functions for external use.
@@ -56,6 +57,16 @@ pub const PIN_MAP_GROUP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/group_bucket_dl";
 pub const PIN_MAP_GROUP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/group_bucket_ul";
 pub const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
 pub const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
+pub const PIN_MAP_SCHEMA_VERSION: &str = "/sys/fs/bpf/zelynic/schema_version";
+
+/// Read the pinned schema version. Returns None if pin doesn't exist or read fails.
+fn read_pinned_schema_version() -> Option<u32> {
+    let map_data = MapData::from_pin(PIN_MAP_SCHEMA_VERSION).ok()?;
+    let map_obj = aya::maps::Map::Array(map_data);
+    let map: BpfArray<_, u32> = BpfArray::try_from(&map_obj).ok()?;
+    let key: u32 = 0;
+    map.get(&key, 0).ok()
+}
 
 /// Check if the pin directory has any files.
 /// Used by status/unstrict-all to detect stale partial state.
@@ -109,19 +120,41 @@ impl Limiter {
             && PathBuf::from(PIN_LINK_UL).exists();
 
         if all_pinned {
-            if verbose {
-                eprintln!("[limiter] BPF programs + links already pinned — reusing");
+            // Check schema version. If mismatch (e.g. upgraded from v1 to v2),
+            // clean up + reload to avoid struct layout incompatibility.
+            match read_pinned_schema_version() {
+                Some(v) if v == SCHEMA_VERSION_EXPECTED => {
+                    if verbose {
+                        eprintln!(
+                            "[limiter] BPF programs + links already pinned (schema v{v}) — reusing"
+                        );
+                    }
+                    return Ok(());
+                }
+                Some(v) => {
+                    if verbose {
+                        eprintln!(
+                            "[limiter] Schema version mismatch: pinned v{v} ≠ expected v{SCHEMA_VERSION_EXPECTED} — reloading"
+                        );
+                    }
+                    unpin_all()?;
+                }
+                None => {
+                    if verbose {
+                        eprintln!("[limiter] Schema version map missing — reloading");
+                    }
+                    unpin_all()?;
+                }
             }
-            return Ok(());
-        }
-
-        // If SOME pins exist but not all → stale state from old version or
-        // crashed run. Clean up everything before reloading.
-        if pin_dir_has_files() {
-            if verbose {
-                eprintln!("[limiter] Stale pin files detected — cleaning up");
+        } else {
+            // If SOME pins exist but not all → stale state from old version or
+            // crashed run. Clean up everything before reloading.
+            if pin_dir_has_files() {
+                if verbose {
+                    eprintln!("[limiter] Stale pin files detected — cleaning up");
+                }
+                unpin_all()?;
             }
-            unpin_all()?;
         }
 
         let obj_path = find_bpf_object()?;
@@ -144,6 +177,20 @@ impl Limiter {
             .map_pin_path(PIN_DIR)
             .load(&obj_data)
             .context("Failed to load BPF object")?;
+
+        // Write schema version to the pinned schema_version map.
+        // This enables future migrations: if the pinned version doesn't match
+        // SCHEMA_VERSION_EXPECTED, attach() cleans up + reloads.
+        {
+            let mut schema_map: BpfArray<_, u32> = BpfArray::try_from(
+                bpf.map_mut("schema_version")
+                    .context("schema_version map not found")?,
+            )
+            .context("Failed to access schema_version map")?;
+            schema_map
+                .set(0, SCHEMA_VERSION_EXPECTED, 0)
+                .map_err(|e| anyhow!("Failed to write schema version: {e}"))?;
+        }
 
         // Load + pin download program (ingress). Do NOT call prog.attach() —
         // Aya 0.13's attach creates a bpf_link that gets detached on drop.

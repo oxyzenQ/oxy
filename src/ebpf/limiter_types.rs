@@ -17,6 +17,13 @@ pub const MIN_RATE: u64 = 1024;
 /// Maximum allowed rate: 1 GB/s.
 pub const MAX_RATE: u64 = 1_000_000_000;
 
+/// BPF schema version. Must match `SCHEMA_VERSION` in `bpf/limiter.bpf.c`.
+/// Increment both when BPF struct layouts change. Userspace checks the pinned
+/// schema_version map on attach — if mismatch, cleans up + reloads.
+/// v1: initial (no frac_rem in bucket, no schema_version map)
+/// v2: added frac_rem to bucket for fractional token tracking
+pub const SCHEMA_VERSION_EXPECTED: u32 = 2;
+
 // ━━ BPF map value structs (must match C structs) ━━
 
 #[repr(C)]
@@ -36,6 +43,7 @@ unsafe impl aya::Pod for PolicyRaw {}
 pub struct BucketRaw {
     pub tokens: u64,
     pub last_refill_ns: u64,
+    pub frac_rem: u64,
 }
 
 unsafe impl aya::Pod for BucketRaw {}
@@ -185,20 +193,31 @@ pub fn monotonic_ns() -> u64 {
     (ts.tv_sec as u64).saturating_mul(1_000_000_000) + (ts.tv_nsec as u64)
 }
 
+/// Format a byte count using decimal SI units (1 KB = 1000 bytes).
+///
+/// This is consistent with `parse_rate` which uses decimal units (1kb = 1000).
+/// Network rates conventionally use SI units (1 Mbps = 1,000,000 bps).
+///
+/// Examples: 500 → "500 B", 1500 → "1.5 KB", 1_500_000 → "1.5 MB",
+///           1_500_000_000 → "1.50 GB"
 pub fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    if bytes < 1000 {
+        format!("{bytes} B")
+    } else if bytes < 1_000_000 {
+        format!("{:.1} KB", bytes as f64 / 1000.0)
+    } else if bytes < 1_000_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
     }
 }
 
+/// Format a rate (bytes per second) with "/s" suffix.
+/// Uses decimal SI units, consistent with `parse_rate` and `format_bytes`.
+///
+/// Examples: 100_000 → "100.0 KB/s", 1_000_000 → "1.0 MB/s"
 pub fn format_rate(bps: u64) -> String {
-    format_bytes(bps)
+    format!("{}/s", format_bytes(bps))
 }
 
 /// Get terminal width in columns. Uses ioctl TIOCGWINSZ.
@@ -312,5 +331,133 @@ mod tests {
     fn test_direction_suffix() {
         assert_eq!(Direction::Download.suffix(), "dl");
         assert_eq!(Direction::Upload.suffix(), "ul");
+    }
+
+    // ━━ Precision tests ━━
+
+    #[test]
+    fn test_format_bytes_decimal_si() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(999), "999 B");
+        assert_eq!(format_bytes(1000), "1.0 KB");
+        assert_eq!(format_bytes(1500), "1.5 KB");
+        assert_eq!(format_bytes(100_000), "100.0 KB");
+        assert_eq!(format_bytes(999_999), "1000.0 KB");
+        assert_eq!(format_bytes(1_000_000), "1.0 MB");
+        assert_eq!(format_bytes(1_500_000), "1.5 MB");
+        assert_eq!(format_bytes(1_000_000_000), "1.00 GB");
+    }
+
+    #[test]
+    fn test_format_rate_with_suffix() {
+        assert_eq!(format_rate(0), "0 B/s");
+        assert_eq!(format_rate(100_000), "100.0 KB/s");
+        assert_eq!(format_rate(1_000_000), "1.0 MB/s");
+        assert_eq!(format_rate(1_000_000_000), "1.00 GB/s");
+    }
+
+    #[test]
+    fn test_parse_rate_consistent_with_format() {
+        // Round-trip: parse("100kb") → 100000 → format → "100.0 KB/s"
+        let rate = parse_rate("100kb").unwrap();
+        assert_eq!(rate, 100_000);
+        assert_eq!(format_rate(rate), "100.0 KB/s");
+
+        let rate = parse_rate("1mb").unwrap();
+        assert_eq!(rate, 1_000_000);
+        assert_eq!(format_rate(rate), "1.0 MB/s");
+    }
+
+    #[test]
+    fn test_bucket_raw_has_frac_rem() {
+        // Verify BucketRaw has 3 fields (24 bytes) for schema v2.
+        // v1 was 16 bytes (tokens + last_refill_ns only).
+        let b = BucketRaw {
+            tokens: 1000,
+            last_refill_ns: 12345,
+            frac_rem: 999_999_999,
+        };
+        assert_eq!(b.tokens, 1000);
+        assert_eq!(b.last_refill_ns, 12345);
+        assert_eq!(b.frac_rem, 999_999_999);
+        assert_eq!(
+            std::mem::size_of::<BucketRaw>(),
+            24,
+            "BucketRaw must be 24 bytes (3 × u64) for schema v2"
+        );
+    }
+
+    /// Simulate BPF fractional token tracking in Rust to verify precision.
+    /// This mirrors the logic in enforce() in bpf/limiter.bpf.c.
+    #[test]
+    fn test_fractional_tracking_precision() {
+        const NS_PER_SEC: u64 = 1_000_000_000;
+
+        // Simulate: rate = 97,700 bps (97.7 KB/s), 1000 refills of 1ms each.
+        let rate_bps: u64 = 97_700;
+        let elapsed_ns: u64 = 1_000_000; // 1ms
+
+        let mut tokens: u64 = 0;
+        let mut frac_rem: u64 = 0;
+
+        for _ in 0..1000 {
+            let product = elapsed_ns * rate_bps;
+            let mut refill_whole = product / NS_PER_SEC;
+            let refill_frac = product % NS_PER_SEC;
+
+            let mut new_frac = frac_rem + refill_frac;
+            if new_frac >= NS_PER_SEC {
+                refill_whole += 1;
+                new_frac -= NS_PER_SEC;
+            }
+            frac_rem = new_frac;
+            tokens += refill_whole;
+        }
+
+        // With fractional tracking, 1000 × 1ms = 1 second of tokens.
+        // Expected: 97,700 bytes (exact rate × 1 second).
+        // Without fractional tracking: 97,000 bytes (truncated).
+        assert_eq!(
+            tokens, 97_700,
+            "fractional tracking should give exact rate over 1 second"
+        );
+
+        // Verify the error is zero (was 0.72% without fractional tracking).
+        let error_pct = ((tokens as i64 - 97_700) as f64 / 97_700.0).abs() * 100.0;
+        assert!(
+            error_pct < 0.01,
+            "error should be < 0.01%, got {error_pct}%"
+        );
+    }
+
+    /// Verify that without fractional tracking, there IS truncation error.
+    /// This test documents the problem that fractional tracking solves.
+    #[test]
+    fn test_truncation_error_without_fractional() {
+        const NS_PER_SEC: u64 = 1_000_000_000;
+
+        let rate_bps: u64 = 97_700;
+        let elapsed_ns: u64 = 1_000_000;
+
+        let mut tokens: u64 = 0;
+
+        for _ in 0..1000 {
+            // Old formula: integer division, no fractional tracking.
+            let refill = (elapsed_ns * rate_bps) / NS_PER_SEC;
+            tokens += refill;
+        }
+
+        // Without fractional tracking: 97,000 (truncated from 97,700).
+        // This is a 0.72% error — the problem fractional tracking fixes.
+        assert_eq!(tokens, 97_000);
+        let error_pct = (97_700 - tokens) as f64 / 97_700.0 * 100.0;
+        assert!(error_pct > 0.5, "truncation error should be > 0.5%");
+    }
+
+    #[test]
+    fn test_schema_version_constant() {
+        // Must match SCHEMA_VERSION in bpf/limiter.bpf.c.
+        // When this changes, the BPF code must also change.
+        assert_eq!(SCHEMA_VERSION_EXPECTED, 2);
     }
 }

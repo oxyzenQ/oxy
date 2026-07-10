@@ -29,9 +29,17 @@ struct policy {
 };
 
 /// Token bucket state. Updated by BPF on every packet.
+///
+/// `frac_rem` tracks the sub-byte fractional remainder from the refill
+/// calculation: `(elapsed_ns * rate_bps) % NS_PER_SEC`. Without this, integer
+/// division truncates up to ~1 byte per refill, causing 0.5–1% rate error
+/// at common rates (e.g. 100 KB/s → actual 99.3 KB/s).
+///
+/// Schema version 2 (added frac_rem). Version 1 (no frac_rem) is incompatible.
 struct bucket {
-    __u64 tokens;         // current token count in bytes
+    __u64 tokens;         // current token count in bytes (integer part)
     __u64 last_refill_ns; // timestamp of last refill (bpf_ktime_get_ns)
+    __u64 frac_rem;       // fractional remainder: (elapsed * rate) % NS_PER_SEC
 };
 
 /// Per-cgroup enforcement stats.
@@ -105,6 +113,22 @@ struct {
     __type(value, __u64); // deadline in nanoseconds
 } watchdog_deadline SEC(".maps");
 
+/// Schema version — used by userspace to detect struct layout changes.
+/// If the pinned version doesn't match SCHEMA_VERSION_EXPECTED, userspace
+/// cleans up all pins and reloads. This enables safe schema evolution.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __type(key, __u32);   // always 0
+    __type(value, __u32); // schema version number
+} schema_version SEC(".maps");
+
+/// Current schema version. Increment when BPF struct layouts change.
+/// v1: initial (no frac_rem in bucket, no schema_version map)
+/// v2: added frac_rem to bucket for fractional token tracking
+#define SCHEMA_VERSION 2
+
 /// Per-cgroup stats (combined dl+ul).
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -118,6 +142,11 @@ struct {
 
 /// Refill tokens and enforce. Returns 1 (allow) or 0 (drop).
 /// `pol` is the policy. `bkt` is the bucket (individual or group).
+///
+/// Uses fractional remainder tracking for high precision: sub-byte
+/// fractions from the refill calculation are accumulated in `frac_rem`
+/// and carried over to the next refill. This eliminates the truncation
+/// error that would otherwise cause ~0.7% rate inaccuracy.
 static __always_inline int enforce(struct policy *pol, struct bucket *bkt,
                                    __u32 pkt_len, __u64 now,
                                    struct limiter_stats *stats) {
@@ -129,24 +158,42 @@ static __always_inline int enforce(struct policy *pol, struct bucket *bkt,
         elapsed = 0;
     }
 
-    // Cap elapsed at 1 second to prevent overflow.
+    // Cap elapsed at 1 second to prevent overflow and limit burst after idle.
+    // Max product: 1e9 ns * 1e9 bps = 1e18, fits in u64 (max 1.8e19).
     if (elapsed > NS_PER_SEC) {
         elapsed = NS_PER_SEC;
     }
 
-    // Calculate refill: (elapsed_ns * rate_bps) / 1e9.
-    __u64 refill = 0;
+    // Calculate refill with fractional precision.
+    // product = elapsed_ns * rate_bps (max 1e18, fits u64)
+    // refill_whole = product / NS_PER_SEC (integer bytes)
+    // refill_frac  = product % NS_PER_SEC (sub-byte remainder)
+    __u64 refill_whole = 0;
+    __u64 new_frac     = bkt->frac_rem;
     if (elapsed > 0) {
-        refill = (elapsed * pol->rate_bps) / NS_PER_SEC;
+        __u64 product     = elapsed * pol->rate_bps;
+        refill_whole      = product / NS_PER_SEC;
+        __u64 refill_frac = product % NS_PER_SEC;
+
+        // Accumulate fractional remainder. If it overflows NS_PER_SEC,
+        // carry 1 byte into the integer tokens.
+        new_frac = bkt->frac_rem + refill_frac;
+        if (new_frac >= NS_PER_SEC) {
+            refill_whole += 1;
+            new_frac -= NS_PER_SEC;
+        }
     }
 
     // New token count, capped at burst.
-    __u64 new_tokens = bkt->tokens + refill;
+    __u64 new_tokens = bkt->tokens + refill_whole;
     if (new_tokens > pol->burst_bytes) {
         new_tokens = pol->burst_bytes;
+        new_frac =
+            0; // reset fraction on cap — at burst, no accumulation needed
     }
 
     bkt->last_refill_ns = now;
+    bkt->frac_rem       = new_frac;
 
     // Check if enough tokens for this packet.
     if (new_tokens >= pkt_len) {
@@ -187,6 +234,7 @@ static __always_inline struct bucket *get_bucket(void *map, __u32 key,
         struct bucket init  = {};
         init.tokens         = burst;
         init.last_refill_ns = now;
+        init.frac_rem       = 0;
         bpf_map_update_elem(map, &key, &init, BPF_ANY);
         bkt = bpf_map_lookup_elem(map, &key);
     }
