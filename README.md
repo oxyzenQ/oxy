@@ -54,7 +54,7 @@ same WiFi interface. No `tc`, no `nftables`, no `LD_PRELOAD`, no daemon.
 
 ### Prerequisites
 
-- Linux kernel 5.7+ (cgroup v2 + bpf_link support)
+- Linux kernel 5.13+ (cgroup v2 + `cgroup.id` file + bpf_link support)
 - Root access (BPF requires `CAP_BPF`)
 - `clang` (compile BPF programs)
 - `libbpf-dev` (BPF headers)
