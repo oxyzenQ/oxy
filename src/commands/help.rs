@@ -72,6 +72,12 @@ pub(crate) fn print_help_all() {
     );
     println!("    sudo zelynic observe --interval 3              # all traffic");
     println!("    sudo zelynic observe --cgroup 8066 --interval 2 # filter to one cgroup");
+    println!(
+        "  {} — Find top bandwidth consumers (snapshot)",
+        "zelynic top [--duration N] [--limit N]".green()
+    );
+    println!("    sudo zelynic top                              # 10s sample, top 10");
+    println!("    sudo zelynic top --duration 30 --limit 5      # 30s sample, top 5");
     println!("  {} — Check eBPF support", "zelynic doctor".green());
     println!();
     println!("{}", "Global flags:".cyan().bold());
@@ -115,6 +121,9 @@ pub(crate) fn print_help_all() {
     println!();
     println!("  # Monitor traffic (UL + DL)");
     println!("  sudo zelynic observe --interval 3");
+    println!();
+    println!("  # Find what's eating your bandwidth");
+    println!("  sudo zelynic top --duration 30");
     println!();
     println!("  # Recover from crash (clean orphaned pins)");
     println!("  sudo zelynic recover");

@@ -198,6 +198,21 @@ pub enum Commands {
         cgroup: Option<u32>,
     },
 
+    /// Find top bandwidth consumers (snapshot)
+    ///
+    /// Collects traffic for N seconds, then shows sorted list of
+    /// top talkers. Perfect for finding what's eating your hotspot data.
+    #[command(name = "top")]
+    Top {
+        /// Sample duration in seconds
+        #[arg(long, default_value = "10")]
+        duration: u64,
+
+        /// Number of top talkers to show
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+
     /// Check if your machine supports eBPF
     #[command(name = "doctor")]
     Doctor,

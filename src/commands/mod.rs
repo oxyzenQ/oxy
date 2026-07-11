@@ -200,6 +200,19 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
+        Some(Commands::Top { duration, limit }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_top(duration, limit, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (duration, limit, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
         Some(Commands::Doctor) => crate::capabilities::run_doctor(cli.print_json),
 
         Some(Commands::Completions { shell }) => backend::handle_completions(&shell),
@@ -1008,6 +1021,112 @@ fn handle_observe(interval: u64, duration: u64, cgroup: Option<u32>, verbose: bo
     } else {
         summary.print(observer.identity());
     }
+    observer.detach();
+    Ok(())
+}
+
+/// Handle `zelynic top` — snapshot top bandwidth consumers.
+/// Attaches observer, collects for N seconds, shows sorted list.
+#[cfg(feature = "ebpf")]
+fn handle_top(duration: u64, limit: usize, _verbose: bool) -> Result<()> {
+    use crate::ebpf::loader::Observer;
+    use colored::Colorize;
+    use std::time::{Duration, Instant};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let mut observer = Observer::attach()?;
+    observer.refresh_identity();
+
+    eprintln!("━━━ zelynic Top — sampling for {duration}s ━━━");
+    eprintln!("  (collecting traffic data...)\n");
+
+    // First poll to establish baseline
+    let _ = observer.poll_and_summarize()?;
+
+    // Collect for duration seconds
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(duration) {
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = observer.poll_and_summarize()?;
+    }
+
+    // Final summary has accumulated deltas
+    let summary = observer.poll_and_summarize()?;
+
+    // Build sorted list: (cgroup_id, dl_bytes, ul_bytes, total, total_pkt)
+    let mut talkers: Vec<(u32, u64, u64, u64, u64)> = summary
+        .cgroups
+        .iter()
+        .map(|c| {
+            let total = c.bytes + c.ingress_bytes;
+            let total_pkt = c.packets + c.ingress_packets;
+            (c.cgroup_id, c.ingress_bytes, c.bytes, total, total_pkt)
+        })
+        .filter(|(_, _, _, total, _)| *total > 0)
+        .collect();
+
+    talkers.sort_by_key(|t| std::cmp::Reverse(t.3));
+
+    if talkers.is_empty() {
+        println!("  No traffic detected during {duration}s sample.");
+        println!("  Try running this while the app you suspect is active.");
+        observer.detach();
+        return Ok(());
+    }
+
+    let shown = talkers.len().min(limit);
+    println!("━━━ Top {shown} Bandwidth Consumers ({duration}s sample) ━━━");
+    println!();
+    println!(
+        "  {:>3}  {:<28} {:>12} {:>12} {:>12}",
+        "#", "CGROUP", "DOWNLOAD", "UPLOAD", "TOTAL"
+    );
+    println!("  {}", "─".repeat(73));
+
+    let mut top_proc_name: Option<String> = None;
+    let mut grand_total_pkt: u64 = 0;
+
+    for (i, (cgroup_id, dl_bytes, ul_bytes, total, total_pkt)) in
+        talkers.iter().take(limit).enumerate()
+    {
+        let label = observer.identity().label(*cgroup_id);
+        grand_total_pkt += total_pkt;
+
+        println!(
+            "  {:>3}  {:<28} {:>12} {:>12} {:>12}",
+            i + 1,
+            label,
+            crate::ebpf::limiter::format_bytes(*dl_bytes),
+            crate::ebpf::limiter::format_bytes(*ul_bytes),
+            crate::ebpf::limiter::format_bytes(*total),
+        );
+
+        // Save top consumer's process name for suggestion
+        if i == 0 {
+            top_proc_name = label
+                .split('(')
+                .nth(1)
+                .and_then(|s| s.strip_suffix(')'))
+                .filter(|s| !s.is_empty() && *s != "unknown")
+                .map(|s| s.to_string());
+        }
+    }
+
+    println!();
+    println!("  {grand_total_pkt} packets total");
+
+    // Suggest limit command for top consumer
+    if let Some(proc_name) = top_proc_name {
+        println!();
+        println!("  {} Top consumer: {proc_name}", "→".yellow().bold());
+        println!("  Limit it now:");
+        println!("    sudo zelynic strict-single {proc_name} 100kb");
+    }
+
     observer.detach();
     Ok(())
 }
