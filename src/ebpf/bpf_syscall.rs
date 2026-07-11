@@ -38,6 +38,25 @@ const BPF_OBJ_PIN: i32 = 6;
 pub const BPF_CGROUP_INET_INGRESS: u32 = 0;
 pub const BPF_CGROUP_INET_EGRESS: u32 = 1;
 
+/// Check if the running kernel supports bpf_link (kernel >= 5.7).
+/// bpf_link_create was added in kernel 5.7 (2020). Virtually all modern
+/// systems have it, but we check for graceful degradation on older kernels.
+pub fn kernel_supports_bpf_link() -> bool {
+    let kv = nix::sys::utsname::uname().ok();
+    if let Some(uname) = kv {
+        let release = uname.release().to_string_lossy();
+        // Parse "5.7.0-arch1" or "5.15.0-generic" etc.
+        let parts: Vec<&str> = release.split('.').collect();
+        if parts.len() >= 2 {
+            let major: u32 = parts[0].parse().unwrap_or(0);
+            let minor: u32 = parts[1].parse().unwrap_or(0);
+            return major > 5 || (major == 5 && minor >= 7);
+        }
+    }
+    // If we can't detect, assume yes (most systems are 5.7+)
+    true
+}
+
 // ━━ Attribute structs (must match kernel union bpf_attr layout) ━━
 
 /// Attribute struct for `BPF_LINK_CREATE`.

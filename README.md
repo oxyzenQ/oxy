@@ -5,12 +5,12 @@
 <h1 align="center">zelynic</h1>
 
 <p align="center">
-  <strong>Per-app network rate limiter for Linux.</strong>
+  <strong>Per-app network rate limiter for Linux. Pure eBPF. Silent but killer.</strong>
 </p>
 
 <p align="center">
-  Pure eBPF enforcement — no <code>tc</code>, no <code>nftables</code>, no <code>systemd-wrapper</code>.<br>
-  One of the first open-source Linux bandwidth managers built around a pure eBPF datapath with per-application rate limiting.
+  One of the first open-source Linux bandwidth managers built around a pure eBPF datapath
+  with per-application rate limiting, fractional precision, and zero-daemon enforcement.
 </p>
 
 <p align="center">
@@ -21,39 +21,40 @@
 
 ---
 
-## What is zelynic?
-
-zelynic limits any app's download/upload speed using **eBPF** — the Linux kernel's
-built-in programmable packet filter. No external tools, no wrapper coordination,
-no daemon. Just pure kernel enforcement.
-
-```
-$ sudo zelynic strict-single brave 100kb
-Limiting 'brave' to 97.7 KB /s + 97.7 KB /s (2 policies, active in background)
-Run 'zelynic unstrict brave' to remove, 'zelynic status' to check.
-$ echo $?
-0
-# brave is now limited to 100 KB/s download + upload — persists in background
-```
-
 ## Why zelynic?
 
-| Traditional tools | zelynic |
-|-------------------|---------|
-| `tc` — per-interface shaping | Per-app (per-cgroup) shaping |
-| `nftables` — packet marking | Direct eBPF token bucket |
-| `wondershaper` — global limit | Individual app limits |
-| `trickle` — LD_PRELOAD hack | Kernel-level enforcement |
+Traditional tools limit interfaces. zelynic limits **applications**.
 
-**Key difference**: zelynic limits **individual applications**, not interfaces.
 Brave can be limited to 100 KB/s while Firefox runs at full speed — all on the
-same WiFi interface.
+same WiFi interface. No `tc`, no `nftables`, no `LD_PRELOAD`, no daemon.
+
+### What makes zelynic sharp
+
+| Edge | Detail |
+|------|--------|
+| **Pure eBPF datapath** | Zero intermediaries. The kernel IS the rate limiter. |
+| **Pinned bpf_links** | Enforcement survives process exit. No daemon, no battery drain. |
+| **Fractional precision** | 0.00% rate error. Sub-byte token accumulation. Others lose ~0.7%. |
+| **Schema migration** | BPF struct changes auto-detected + auto-cleaned on upgrade. |
+| **Crash recovery** | `zelynic recover` detects + removes orphaned BPF pins. File lock prevents corruption. |
+| **Discovery workflow** | `zelynic top --live` finds bandwidth hogs. Other limiters can't discover. |
+| **Alt screen mode** | Clean terminal like htop. Zero trace on exit. No scrollback pollution. |
+
+### vs traditional tools
+
+| Tool | Technology | Per-app? | Daemon? | Precision |
+|------|-----------|----------|---------|-----------|
+| `tc` | HTB/TBF qdisc | Per-interface | No | Integer |
+| `nftables` + `tc` | Mark + shape | Complex setup | No | Integer |
+| `wondershaper` | tc wrapper | Global only | No | Integer |
+| `trickle` | LD_PRELOAD | Dynamic only | No | Integer |
+| **zelynic** | **Pure eBPF** | **Per-cgroup** | **No** | **0.00%** |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Linux kernel 5.13+ (cgroup v2 + `cgroup.id` file)
+- Linux kernel 5.7+ (cgroup v2 + bpf_link support)
 - Root access (BPF requires `CAP_BPF`)
 - `clang` (compile BPF programs)
 - `libbpf-dev` (BPF headers)
@@ -63,7 +64,6 @@ same WiFi interface.
 ```bash
 git clone https://github.com/oxyzenQ/zelynic.git
 cd zelynic
-git checkout dragon-architecture
 
 # Compile BPF programs
 clang -O2 -g -target bpf -c bpf/observer.bpf.c -o bpf/observer.bpf.o
@@ -85,11 +85,23 @@ sudo zelynic strict-single firefox -d 1mb -u 500kb
 # Limit multiple apps sharing one rate (group limit)
 sudo zelynic strict-multi brave:curl:pacman 1mb
 
+# Limit ALL user apps
+sudo zelynic all-limit 500kb
+
+# Find what's eating your bandwidth (10s snapshot)
+sudo zelynic top
+
+# Live tracking — catches bursty apps (Ctrl+q/ESC to quit)
+sudo zelynic top --live 0
+
+# Monitor traffic in box mode (UL + DL, clean terminal)
+sudo zelynic observe
+
 # Check active limits
 sudo zelynic status
 
-# List apps with cgroup IDs
-sudo zelynic list-apps
+# JSON output (for scripts)
+sudo zelynic status --print-json | jq '.limits[]'
 
 # Remove one app's limit
 sudo zelynic unstrict brave
@@ -97,16 +109,34 @@ sudo zelynic unstrict brave
 # Remove ALL limits (emergency)
 sudo zelynic unstrict-all
 
-# Real-time traffic monitor
-sudo zelynic observe --interval 5
+# Recover from crash (clean orphaned pins)
+sudo zelynic recover
 
 # Check eBPF support
-zelynic doctor
+sudo zelynic doctor
+```
+
+## Commands
+
+```
+strict-single <target> [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
+strict-multi  <a:b:c>  [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
+all-limit              [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
+unstrict <target>
+unstrict-all
+recover
+status [--print-json]
+list-apps [--print-json]
+observe [--live <dur>] [--cgroup <id>]
+top [--duration <dur>] [--live <dur>] [--limit N]
+doctor [--print-json]
+completions <shell>
+man
 ```
 
 ## Rate Formats
 
-Lowercase units only:
+Lowercase units only (decimal SI: 1 KB = 1000 bytes):
 
 | Format | Meaning |
 |--------|---------|
@@ -114,9 +144,20 @@ Lowercase units only:
 | `100kb` | 100 kilobytes/second |
 | `1mb` | 1 megabyte/second |
 | `1gb` | 1 gigabyte/second |
-| `1000000` | Plain number = bytes/second |
+| `100gb` | 100 gigabytes/second |
 
-**Bounds**: minimum 1 KB/s, maximum 100 GB/s. Both bounds can be overridden with `--allow-dangerous`.
+**Bounds**: minimum 1 KB/s, maximum 100 GB/s. Both overridable with `--allow-dangerous`.
+
+## Time Durations
+
+For `--live` and `--duration` flags:
+
+| Format | Meaning |
+|--------|---------|
+| `1s` | 1 second |
+| `3m` | 3 minutes |
+| `10h` | 10 hours |
+| `0` | forever (until q/ESC/Ctrl+C) |
 
 ## Safety Features
 
@@ -128,6 +169,9 @@ Lowercase units only:
 - **Dangerous target protection**: 53 system processes blocked by default
 - **Overflow detection**: absurd rates show friendly warning, not wrapped values
 - **Crash recovery**: `zelynic recover` detects + cleans orphaned BPF pins
+- **File lock**: prevents concurrent operations from corrupting BPF state
+- **Schema migration**: BPF struct changes auto-detected + auto-cleaned on upgrade
+- **Kernel version detection**: graceful fallback for kernel < 5.7 (legacy bpf_prog_attach)
 
 ## Architecture
 
@@ -136,7 +180,7 @@ Lowercase units only:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Layer 4 — Presentation (CLI)                           │
-│  strict-single / strict-multi / status / unstrict       │
+│  strict-single / strict-multi / status / top / observe  │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3 — Aggregation (delta computation, sorting)     │
 ├─────────────────────────────────────────────────────────┤
@@ -148,8 +192,6 @@ Lowercase units only:
 │  cgroup_skb/ingress (download) + cgroup_skb/egress (upload) │
 └─────────────────────────────────────────────────────────┘
 ```
-
-See [docs/DRAGON_ARCHITECTURE.md](docs/DRAGON_ARCHITECTURE.md) for full design.
 
 ## Philosophy
 
@@ -176,9 +218,6 @@ slightly easier to maintain.
 - ❌ No daemon mode
 - ❌ No REST API
 - ❌ No Windows support
-
-This is intentional. Many projects break after adding "too many features".
-zelynic stays small on purpose.
 
 ### Stable API (from v10.0.0)
 
@@ -208,21 +247,22 @@ Release cadence slows to "when needed".
 
 - [Dragon Architecture](docs/DRAGON_ARCHITECTURE.md) — design + principles
 - [Kernel Compatibility](docs/KERNEL_COMPATIBILITY.md) — requirements + distro matrix
+- [Performance Metrics](docs/PERFORMANCE.md) — benchmark results + targets
 - [Migration to v4.0](docs/MIGRATION_V4.md) — v3.x → v4.0 guide
-- [Stress Test](scripts/stress-test.sh) — long-running enforcement test
-- [Benchmark](scripts/benchmark.sh) — CPU/memory overhead measurement
+- [Release Verification](docs/VERIFY_RELEASE.md) — checksum verification
 
 ## Test Results
 
-Real test results (Arch Linux, kernel 6.18, AMD Ryzen 7 5800HS):
+Verified on 6 distributions (all pass 17/17 depth + 13/13 leak tests):
 
-| App | Target | Actual Download | Actual Upload | Status |
-|-----|--------|-----------------|---------------|--------|
-| Chromium | -d 100kb -u 500kb | 670 Kbps (83 KB/s) | 3.5 Mbps | ✅ Working |
-| Brave | -d 100kb -u 500kb | 730 Kbps (91 KB/s) | 4.3 Mbps | ✅ Working |
-| aria2c | 500→100→10→2kb | Override each time | — | ✅ Override works |
-
-CPU/memory: negligible (serve child < 1% CPU, < 10 MB RAM).
+| Distro | Kernel | Binary | Enforcement |
+|--------|--------|--------|-------------|
+| Arch Linux | 6.18 | GNU | brave 100kb → 730 Kbps |
+| CachyOS VM | 7.1 | MUSL | chromium 360kb → 3.0 Mbps |
+| Ubuntu 26.04 | 6.15 | GNU | firefox 100kb → 650 Kbps |
+| Fedora 44 | 6.19 | GNU | firefox 100kb → 690 Kbps |
+| Ubuntu 21.10 | 5.13 | MUSL | GeckoMain 100kb → 770 Kbps |
+| Debian 13 | 6.12 | MUSL | firefox-esr 900kb → 7.0 Mbps |
 
 ## Release Verification
 
@@ -238,7 +278,6 @@ sha512sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.sha512sum
 b2sum -c zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.b2sum
 
 # Quantum-resistant — SHAKE256 (NIST PQ standard, via Python)
-# openssl's -shake256 default output length varies; Python is consistent
 COMPUTED=$(python3 -c "import hashlib; print(hashlib.shake_256(open('zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz','rb').read()).hexdigest(64))")
 EXPECTED=$(awk '{print $1}' zelynic-vX.Y.Z-linux-amd64-gnu.tar.gz.shake256)
 [ "$COMPUTED" = "$EXPECTED" ] && echo "OK" || echo "FAILED"
