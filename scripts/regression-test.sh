@@ -49,12 +49,12 @@ log_section() {
 
 log_pass() {
     echo -e "  ${GREEN}✓ PASS${NC}: $1"
-    ((PASS++))
+    PASS=$((PASS + 1))
 }
 
 log_fail() {
     echo -e "  ${RED}✗ FAIL${NC}: $1"
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
 }
 
 run_suite() {

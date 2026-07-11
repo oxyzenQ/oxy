@@ -32,18 +32,18 @@ PIN_DIR="/sys/fs/bpf/zelynic"
 
 log_pass() {
     echo -e "  ${GREEN}✓ PASS${NC}: $1"
-    ((PASS++))
+    PASS=$((PASS + 1))
 }
 
 log_fail() {
     echo -e "  ${RED}✗ FAIL${NC}: $1"
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
 }
 
 log_test() {
     echo ""
     echo -e "  ${YELLOW}TEST${NC}: $1"
-    ((TOTAL++))
+    TOTAL=$((TOTAL + 1))
 }
 
 check_root() {
