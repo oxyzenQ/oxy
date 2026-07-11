@@ -20,11 +20,12 @@ pub const MIN_RATE: u64 = 1024;
 pub const MAX_RATE: u64 = 100_000_000_000;
 
 /// BPF schema version. Must match `SCHEMA_VERSION` in `bpf/limiter.bpf.c`.
-/// Increment both when BPF struct layouts change. Userspace checks the pinned
-/// schema_version map on attach — if mismatch, cleans up + reloads.
+/// Increment both when BPF struct layouts or semantics change. Userspace checks
+/// the pinned schema_version map on attach — if mismatch, cleans up + reloads.
 /// v1: initial (no frac_rem in bucket, no schema_version map)
 /// v2: added frac_rem to bucket for fractional token tracking
-pub const SCHEMA_VERSION_EXPECTED: u32 = 2;
+/// v3: rate_bps == 0 changed from "allow all" to "block all" (block-single)
+pub const SCHEMA_VERSION_EXPECTED: u32 = 3;
 
 // ━━ BPF map value structs (must match C structs) ━━
 
@@ -534,6 +535,6 @@ mod tests {
     fn test_schema_version_constant() {
         // Must match SCHEMA_VERSION in bpf/limiter.bpf.c.
         // When this changes, the BPF code must also change.
-        assert_eq!(SCHEMA_VERSION_EXPECTED, 2);
+        assert_eq!(SCHEMA_VERSION_EXPECTED, 3);
     }
 }

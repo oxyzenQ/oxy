@@ -122,6 +122,32 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
+        Some(Commands::BlockSingle { target, force }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_block_single(&target, force, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (target, force, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::Unblock { target }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_unstrict(&target, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (target, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
         Some(Commands::Unstrict { target }) => {
             #[cfg(feature = "ebpf")]
             {
@@ -693,6 +719,44 @@ fn resolve_rates(
             upload: None,
         })
     }
+}
+
+/// Handle `zelynic block-single` — block an app from the internet.
+/// Writes a policy with rate_bps = 0, which BPF interprets as "drop all".
+#[cfg(feature = "ebpf")]
+fn handle_block_single(target_str: &str, force: bool, verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    // Prevent concurrent operations.
+    let _lock = crate::ebpf::lock::acquire()?;
+    check_dangerous_target(target_str, force)?;
+
+    // Attach BPF programs (pins to /sys/fs/bpf/zelynic/ — survives exit).
+    Limiter::attach(verbose)?;
+
+    // Open pinned maps and write block policy (rate = 0).
+    let mut limiter = Limiter::open_pinned(verbose)?;
+    let target = Target::parse(target_str);
+
+    // rate = 0 means BLOCKED in BPF (schema v3+).
+    let rates = RateSpec {
+        download: Some(0),
+        upload: Some(0),
+    };
+    let applied = limiter.apply_single(&target, &rates)?;
+    if applied == 0 {
+        eprintln!("No cgroup found for '{target_str}'. Nothing to block.");
+        return Ok(());
+    }
+
+    eprintln!("Blocked '{target_str}' from internet ({applied} policies, active in background)");
+    eprintln!("Run 'zelynic unblock {target_str}' to restore access, 'zelynic status' to check.");
+    Ok(())
 }
 
 #[cfg(feature = "ebpf")]

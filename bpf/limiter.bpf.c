@@ -127,7 +127,7 @@ struct {
 /// Current schema version. Increment when BPF struct layouts change.
 /// v1: initial (no frac_rem in bucket, no schema_version map)
 /// v2: added frac_rem to bucket for fractional token tracking
-#define SCHEMA_VERSION 2
+#define SCHEMA_VERSION 3
 
 /// Per-cgroup stats (combined dl+ul).
 struct {
@@ -264,8 +264,11 @@ int enforce_dl(struct __sk_buff *skb) {
     struct policy *pol = bpf_map_lookup_elem(&cgroup_policy_dl, &cgroup_id);
     if (!pol)
         return 1;
+    // rate_bps == 0 means BLOCKED (drop all packets).
+    // Used by 'zelynic block-single' command.
+    // Schema v3: changed from return 1 (allow) to return 0 (drop).
     if (pol->rate_bps == 0)
-        return 1;
+        return 0;
 
     struct limiter_stats *stats = get_stats(cgroup_id);
 
@@ -308,8 +311,11 @@ int enforce_ul(struct __sk_buff *skb) {
     struct policy *pol = bpf_map_lookup_elem(&cgroup_policy_ul, &cgroup_id);
     if (!pol)
         return 1;
+    // rate_bps == 0 means BLOCKED (drop all packets).
+    // Used by 'zelynic block-single' command.
+    // Schema v3: changed from return 1 (allow) to return 0 (drop).
     if (pol->rate_bps == 0)
-        return 1;
+        return 0;
 
     struct limiter_stats *stats = get_stats(cgroup_id);
 

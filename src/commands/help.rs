@@ -54,6 +54,17 @@ pub(crate) fn print_help_all() {
     );
     println!();
     println!(
+        "  {} — Block an app from the internet entirely",
+        "zelynic block-single <target>".green()
+    );
+    println!("    sudo zelynic block-single brave");
+    println!(
+        "  {} — Unblock an app (restore internet access)",
+        "zelynic unblock <target>".green()
+    );
+    println!("    zelynic unblock brave");
+    println!();
+    println!(
         "  {} — Recover from crash (clean orphaned pins)",
         "zelynic recover".green()
     );

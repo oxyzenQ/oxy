@@ -151,6 +151,28 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Block an app from accessing the internet entirely
+    ///
+    /// Example: zelynic block-single brave
+    #[command(name = "block-single")]
+    BlockSingle {
+        /// Target: process name or cgroup ID
+        target: String,
+
+        /// Force block on dangerous/system targets
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Unblock an app (remove block, same as unstrict)
+    ///
+    /// Example: zelynic unblock brave
+    #[command(name = "unblock")]
+    Unblock {
+        /// Target: process name or cgroup ID
+        target: String,
+    },
+
     /// Remove rate limit from a target
     ///
     /// Example: zelynic unstrict brave
