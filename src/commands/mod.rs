@@ -801,13 +801,13 @@ fn handle_status(verbose: bool) -> Result<()> {
     // (2 programs + 2 links), but stale pins from old versions may have
     // partial files. If partial → warn + suggest unstrict-all.
     if !pin_dir_has_files() {
-        eprintln!("No active limits.");
+        println!("No active limits.");
         return Ok(());
     }
 
     if !Limiter::is_pinned() {
-        eprintln!("Stale BPF pin files detected (partial state from old version).");
-        eprintln!("Run 'zelynic unstrict-all' to clean up, then re-apply limits.");
+        println!("Stale BPF pin files detected (partial state from old version).");
+        println!("Run 'zelynic unstrict-all' to clean up, then re-apply limits.");
         return Ok(());
     }
 
