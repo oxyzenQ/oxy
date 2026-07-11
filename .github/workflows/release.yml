@@ -93,9 +93,10 @@ jobs:
           cp scripts/install.sh scripts/uninstall.sh "dist/${PKG_GNU}/"
           chmod +x "dist/${PKG_GNU}/install.sh" "dist/${PKG_GNU}/uninstall.sh"
           cp scripts/distros-depth-test.sh scripts/leak-test.sh \
-             scripts/stress-test.sh scripts/benchmark.sh \
-             scripts/long-endurance-test.sh "dist/${PKG_GNU}/scripts/"
-          chmod +x "dist/${PKG_GNU}/scripts/"*.sh
+             scripts/stress-test.sh scripts/benchmarking.sh scripts/benchmarking.py \
+             scripts/race-condition-test.sh scripts/reload-test.sh \
+             scripts/crash-recovery-test.sh "dist/${PKG_GNU}/scripts/"
+          chmod +x "dist/${PKG_GNU}/scripts/"*.sh "dist/${PKG_GNU}/scripts/"*.py
           "./dist/${PKG_GNU}/zelynic" man > "dist/${PKG_GNU}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_GNU}/man/zelynic.1" ] && gzip -f "dist/${PKG_GNU}/man/zelynic.1"
           cd dist && tar -czf "${PKG_GNU}.tar.gz" "${PKG_GNU}"
@@ -122,9 +123,10 @@ jobs:
           cp scripts/install.sh scripts/uninstall.sh "dist/${PKG_MUSL}/"
           chmod +x "dist/${PKG_MUSL}/install.sh" "dist/${PKG_MUSL}/uninstall.sh"
           cp scripts/distros-depth-test.sh scripts/leak-test.sh \
-             scripts/stress-test.sh scripts/benchmark.sh \
-             scripts/long-endurance-test.sh "dist/${PKG_MUSL}/scripts/"
-          chmod +x "dist/${PKG_MUSL}/scripts/"*.sh
+             scripts/stress-test.sh scripts/benchmarking.sh scripts/benchmarking.py \
+             scripts/race-condition-test.sh scripts/reload-test.sh \
+             scripts/crash-recovery-test.sh "dist/${PKG_MUSL}/scripts/"
+          chmod +x "dist/${PKG_MUSL}/scripts/"*.sh "dist/${PKG_MUSL}/scripts/"*.py
           "./dist/${PKG_MUSL}/zelynic" man > "dist/${PKG_MUSL}/man/zelynic.1" 2>/dev/null || true
           [ -f "dist/${PKG_MUSL}/man/zelynic.1" ] && gzip -f "dist/${PKG_MUSL}/man/zelynic.1"
           cd dist && tar -czf "${PKG_MUSL}.tar.gz" "${PKG_MUSL}"
