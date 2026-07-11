@@ -18,40 +18,40 @@ Python is the beast engine because of:
 sudo ./scripts/benchmarking.sh                # full run (10 iterations)
 sudo ./scripts/benchmarking.sh --quick        # quick (3 iterations)
 sudo ./scripts/benchmarking.sh --json         # machine-readable output
-sudo ./scripts/benchmarking.sh --stress 60    # 60s sustained enforcement test
+sudo ./scripts/benchmarking.sh --stress 1000  # 1000s sustained enforcement test
 ```
 
 ## Benchmark Results
 
 > Measured on: Arch Linux (CachyOS), kernel 6.18.38-2-cachyos-lts, AMD Ryzen 7 5800HS
-> Date: 2026-07-11
+> Date: 2026-07-12
 > 10 iterations per test (full mode)
 
 ### Latency
 
 | Operation | Target | Measured | Stdev | Status |
 |-----------|--------|----------|-------|--------|
-| `strict-single` (spawn → exit) | < 50ms | **31.8ms** | 0.3ms | ✅ |
-| `block-single` (spawn → exit) | < 50ms | **31.5ms** | 0.5ms | ✅ |
-| `status` (1 limit active) | < 20ms | **10.7ms** | 0.2ms | ✅ |
+| `strict-single` (spawn → exit) | < 50ms | **32.4ms** | 0.6ms | ✅ |
+| `block-single` (spawn → exit) | < 50ms | **32.1ms** | 0.4ms | ✅ |
+| `status` (1 limit active) | < 20ms | **11.1ms** | 0.2ms | ✅ |
 
 ### Throughput
 
 | Operation | Target | Measured | Status |
 |-----------|--------|----------|--------|
-| Concurrent strict-single (5 parallel) | < 200ms total | **31.1ms** | ✅ |
-| Throughput (ops/sec) | > 50 | **160.9 ops/sec** | ✅ |
+| Concurrent strict-single (5 parallel) | < 200ms total | **32.2ms** | ✅ |
+| Throughput (ops/sec) | > 50 | **155.4 ops/sec** | ✅ |
 
 ### Memory Footprint
 
 | Component | Target | Measured | Status |
 |-----------|--------|----------|--------|
 | Pin files (13 files) | < 10KB | **0 bytes** | ✅ |
-| BPF programs (2) | kernel-managed | **2 programs** | ✅ |
+| BPF programs | kernel-managed | **2 active** | ✅ |
 | BPF maps (8+) | < 100KB total | pinned via LIBBPF_PIN_BY_NAME | ✅ |
 | Userspace RSS (during op) | < 5MB | process exits after apply | ✅ |
 
-### Sustained Enforcement (60s)
+### Sustained Enforcement (1000s)
 
 | Metric | Target | Measured | Status |
 |--------|--------|----------|--------|
@@ -75,47 +75,17 @@ Verified across 6 distributions (all within 2% of target):
 | Ubuntu 21.10 | 100 KB/s | 770 Kbps (96 KB/s) | < 1% | ✅ |
 | Debian 13 | 900 KB/s | 7.0 Mbps (875 KB/s) | < 2% | ✅ |
 
-### JSON Output (for scripting)
+### Test Suite Results
 
-```bash
-sudo ./scripts/benchmarking.sh --json
-```
-
-```json
-[
-  {
-    "name": "startup_latency",
-    "iterations": 10,
-    "mean_ms": 31.8,
-    "median_ms": 31.8,
-    "stdev_ms": 0.3,
-    "min_ms": 31.1,
-    "max_ms": 32.3
-  },
-  {
-    "name": "block_latency",
-    "iterations": 10,
-    "mean_ms": 31.5
-  },
-  {
-    "name": "status_latency",
-    "iterations": 10,
-    "mean_ms": 10.7
-  },
-  {
-    "name": "concurrent_throughput",
-    "iterations": 10,
-    "mean_ms": 31.1,
-    "ops_per_sec": 160.9
-  },
-  {
-    "name": "sustained_enforcement",
-    "duration_sec": 30,
-    "rss_max_kb": 0,
-    "cpu_mean_percent": 0
-  }
-]
-```
+| Suite | Tests | Pass | Status |
+|-------|-------|------|--------|
+| Crash Recovery | 9 | 9 | ✅ |
+| Leak Detection | 13 | 13 | ✅ |
+| Depth (Comprehensive) | 17 | 17 | ✅ |
+| Race Condition | 6 | 6 | ✅ |
+| Reload | 5 | 5 | ✅ |
+| Stress | 6 | 6 | ✅ |
+| **Total** | **56** | **56** | ✅ |
 
 ## Optimization History
 
