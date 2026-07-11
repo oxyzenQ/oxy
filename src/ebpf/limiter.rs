@@ -542,6 +542,79 @@ impl Limiter {
         }
     }
 
+    /// Print status as JSON (for --print-json / scripting integration).
+    pub fn print_status_json(&self) -> Result<()> {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct LimitEntry {
+            cgroup_id: u32,
+            label: String,
+            download_bps: Option<u64>,
+            upload_bps: Option<u64>,
+            packets_allowed: u64,
+            packets_dropped: u64,
+            bytes_allowed: u64,
+            bytes_dropped: u64,
+        }
+
+        #[derive(Serialize)]
+        struct StatusJson {
+            watchdog: &'static str,
+            active_limits: usize,
+            limits: Vec<LimitEntry>,
+        }
+
+        let dl_policies = self.read_policies(Direction::Download).unwrap_or_default();
+        let ul_policies = self.read_policies(Direction::Upload).unwrap_or_default();
+        let stats = self.read_stats().unwrap_or_default();
+
+        let watchdog = match self.read_watchdog() {
+            Ok(Some(0)) | Ok(None) | Err(_) => "enforcing",
+            Ok(Some(d)) if d > monotonic_ns() => "active",
+            Ok(Some(_)) => "expired",
+        };
+
+        use std::collections::HashMap;
+        let mut combined: HashMap<u32, (Option<u64>, Option<u64>)> = HashMap::new();
+        for (id, p) in &dl_policies {
+            combined.entry(*id).or_default().0 = Some(p.rate_bps);
+        }
+        for (id, p) in &ul_policies {
+            combined.entry(*id).or_default().1 = Some(p.rate_bps);
+        }
+
+        let mut sorted: Vec<_> = combined.into_iter().collect();
+        sorted.sort_by_key(|(id, _)| *id);
+
+        let limits: Vec<LimitEntry> = sorted
+            .iter()
+            .map(|(cgroup_id, (dl, ul))| {
+                let label = self.identity.label(*cgroup_id);
+                let s = stats.iter().find(|(id, _)| id == cgroup_id);
+                LimitEntry {
+                    cgroup_id: *cgroup_id,
+                    label,
+                    download_bps: *dl,
+                    upload_bps: *ul,
+                    packets_allowed: s.map(|(_, s)| s.packets_allowed).unwrap_or(0),
+                    packets_dropped: s.map(|(_, s)| s.packets_dropped).unwrap_or(0),
+                    bytes_allowed: s.map(|(_, s)| s.bytes_allowed).unwrap_or(0),
+                    bytes_dropped: s.map(|(_, s)| s.bytes_dropped).unwrap_or(0),
+                }
+            })
+            .collect();
+
+        let status = StatusJson {
+            watchdog,
+            active_limits: limits.len(),
+            limits,
+        };
+
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        Ok(())
+    }
+
     // ━━ Internal helpers ━━
 
     /// Resolve a target to cgroup IDs.
@@ -665,7 +738,7 @@ impl Limiter {
     }
 
     /// Delete a policy from BPF map. Returns Ok(true) if deleted, Ok(false) if not found.
-    fn delete_policy(&mut self, cgroup_id: u32, direction: Direction) -> Result<bool> {
+    pub fn delete_policy(&mut self, cgroup_id: u32, direction: Direction) -> Result<bool> {
         if let Some(bpf) = self.bpf.as_mut() {
             let map_name = format!("cgroup_policy_{}", direction.suffix());
             let mut map: BpfHashMap<_, u32, PolicyRaw> = BpfHashMap::try_from(

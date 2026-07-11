@@ -224,6 +224,42 @@ impl CounterSummary {
         }
     }
 
+    /// Print summary filtered to a single cgroup ID.
+    pub fn print_filtered(&self, identity: &IdentityMap, cgroup_id: u32) {
+        let filtered: Vec<_> = self
+            .cgroups
+            .iter()
+            .filter(|c| c.cgroup_id == cgroup_id)
+            .collect();
+
+        if filtered.is_empty() {
+            println!("\n  (no traffic for cgroup {cgroup_id} since last check)");
+            return;
+        }
+
+        println!("\n━━━ eBPF Traffic (cgroup {cgroup_id}) ━━━");
+        let label = identity.label(cgroup_id);
+        println!("  Label:    {label}");
+        println!("  Cgroups:  {}", filtered.len());
+        println!();
+
+        println!(
+            "  {:<30} {:>10} {:>10} {:>12}",
+            "CGROUP", "DELTA PKT", "DELTA BYTES", "TOTAL BYTES"
+        );
+        println!("  {}", "─".repeat(66));
+
+        for c in &filtered {
+            println!(
+                "  {:<30} {:>10} {:>10} {:>12}",
+                label,
+                c.packets,
+                format_bytes(c.bytes),
+                format_bytes(c.total_bytes),
+            );
+        }
+    }
+
     /// Print summary with verbose labels (includes cgroup path).
     pub fn print_verbose(&self, identity: &IdentityMap) {
         if self.total_packets == 0 {

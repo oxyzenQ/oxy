@@ -162,7 +162,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::Status) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_status(cli.verbose)
+                handle_status(cli.verbose, cli.print_json)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -174,7 +174,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::ListApps) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_list_apps()
+                handle_list_apps(cli.print_json)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -183,20 +183,24 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
-        Some(Commands::Observe { interval, duration }) => {
+        Some(Commands::Observe {
+            interval,
+            duration,
+            cgroup,
+        }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_observe(interval, duration, cli.verbose)
+                handle_observe(interval, duration, cgroup, cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
-                let _ = (interval, duration, cli.verbose);
+                let _ = (interval, duration, cgroup, cli.verbose);
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
                 Err(anyhow::anyhow!("eBPF feature not enabled"))
             }
         }
 
-        Some(Commands::Doctor) => crate::capabilities::run_doctor(false),
+        Some(Commands::Doctor) => crate::capabilities::run_doctor(cli.print_json),
 
         Some(Commands::Completions { shell }) => backend::handle_completions(&shell),
 
@@ -775,8 +779,69 @@ fn handle_recover(verbose: bool) -> Result<()> {
     let is_valid = Limiter::is_pinned();
 
     if is_valid {
+        // BPF is valid — check for orphan policies (cgroup dead, policy remains).
         eprintln!("  State: valid (BPF programs + links pinned)");
-        eprintln!("  Action: nothing to recover — use 'unstrict-all' to remove limits");
+        eprintln!("  Checking for orphan policies...");
+
+        let mut limiter = Limiter::open_pinned(verbose)?;
+        limiter.refresh_identity();
+
+        let dl_policies = limiter
+            .read_policies_public(crate::ebpf::limiter::Direction::Download)
+            .unwrap_or_default();
+        let ul_policies = limiter
+            .read_policies_public(crate::ebpf::limiter::Direction::Upload)
+            .unwrap_or_default();
+
+        // Collect all cgroup IDs that have policies.
+        use std::collections::HashSet;
+        let mut policy_cgroup_ids: HashSet<u32> = HashSet::new();
+        for (id, _) in &dl_policies {
+            policy_cgroup_ids.insert(*id);
+        }
+        for (id, _) in &ul_policies {
+            policy_cgroup_ids.insert(*id);
+        }
+
+        // Check which cgroup IDs are still alive (exist in identity map).
+        let alive_ids: HashSet<u32> = limiter
+            .identity()
+            .all()
+            .iter()
+            .map(|e| e.cgroup_id)
+            .collect();
+
+        let orphan_ids: Vec<u32> = policy_cgroup_ids
+            .iter()
+            .filter(|id| !alive_ids.contains(id))
+            .copied()
+            .collect();
+
+        if orphan_ids.is_empty() {
+            eprintln!(
+                "  Orphans: none (all {} policies have live cgroups)",
+                policy_cgroup_ids.len()
+            );
+            eprintln!("  Action: nothing to recover — use 'unstrict-all' to remove limits");
+            return Ok(());
+        }
+
+        eprintln!(
+            "  Orphans: {} policy cgroup(s) no longer exist:",
+            orphan_ids.len()
+        );
+        for id in &orphan_ids {
+            eprintln!("    - cg:{id}");
+        }
+        eprintln!("  Action: removing orphan policies...");
+
+        // Remove orphan policies from BPF maps.
+        for id in &orphan_ids {
+            let _ = limiter.delete_policy(*id, crate::ebpf::limiter::Direction::Download);
+            let _ = limiter.delete_policy(*id, crate::ebpf::limiter::Direction::Upload);
+        }
+
+        eprintln!("  Result: removed {} orphan policy(ies)", orphan_ids.len());
         return Ok(());
     }
 
@@ -805,7 +870,7 @@ fn handle_recover(verbose: bool) -> Result<()> {
 }
 
 #[cfg(feature = "ebpf")]
-fn handle_status(verbose: bool) -> Result<()> {
+fn handle_status(verbose: bool, json: bool) -> Result<()> {
     use crate::ebpf::limiter::Limiter;
 
     if !nix::unistd::geteuid().is_root() {
@@ -817,43 +882,73 @@ fn handle_status(verbose: bool) -> Result<()> {
     // (2 programs + 2 links), but stale pins from old versions may have
     // partial files. If partial → warn + suggest unstrict-all.
     if !pin_dir_has_files() {
-        println!("No active limits.");
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"watchdog": "clean", "active_limits": 0, "limits": []})
+            );
+        } else {
+            println!("No active limits.");
+        }
         return Ok(());
     }
 
     if !Limiter::is_pinned() {
-        println!("Stale BPF pin files detected (partial state from old version).");
-        println!("Run 'zelynic unstrict-all' to clean up, then re-apply limits.");
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"error": "stale pins detected", "hint": "run 'zelynic recover'"})
+            );
+        } else {
+            println!("Stale BPF pin files detected (partial state from old version).");
+            println!("Run 'zelynic unstrict-all' to clean up, then re-apply limits.");
+        }
         return Ok(());
     }
 
     let mut limiter = Limiter::open_pinned(verbose)?;
     limiter.refresh_identity();
-    limiter.print_status();
+    if json {
+        limiter.print_status_json()?;
+    } else {
+        limiter.print_status();
+    }
     Ok(())
 }
 
 #[cfg(feature = "ebpf")]
-fn handle_list_apps() -> Result<()> {
+fn handle_list_apps(json: bool) -> Result<()> {
     use crate::ebpf::identity::IdentityMap;
     use colored::Colorize;
 
     let mut identity = IdentityMap::new();
     let count = identity.refresh();
 
-    println!("{}", "━━━ Apps with cgroup IDs ━━━".bold());
-    println!("  {} cgroups resolved\n", count);
-
     let mut entries: Vec<_> = identity.all().into_iter().collect();
     entries.sort_by(|a, b| a.comm.cmp(&b.comm));
+    entries.retain(|e| !e.comm.is_empty());
 
+    if json {
+        let apps: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "process": e.comm,
+                    "cgroup_id": e.cgroup_id,
+                    "uid": e.uid,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::json!({"total": count, "apps": apps}));
+        return Ok(());
+    }
+
+    println!("{}", "━━━ Apps with cgroup IDs ━━━".bold());
+    println!("  {} cgroups resolved\n", count);
     println!("  {:<30} {:>10} {:>8}", "PROCESS", "CGROUP ID", "UID");
     println!("  {}", "─".repeat(50));
 
     for id in entries {
-        if id.comm.is_empty() {
-            continue;
-        }
         println!(
             "  {:<30} {:>10} {:>8}",
             id.comm,
@@ -866,7 +961,7 @@ fn handle_list_apps() -> Result<()> {
 }
 
 #[cfg(feature = "ebpf")]
-fn handle_observe(interval: u64, duration: u64, verbose: bool) -> Result<()> {
+fn handle_observe(interval: u64, duration: u64, cgroup: Option<u32>, verbose: bool) -> Result<()> {
     use crate::ebpf::loader::Observer;
     use std::time::{Duration, Instant};
 
@@ -880,6 +975,9 @@ fn handle_observe(interval: u64, duration: u64, verbose: bool) -> Result<()> {
     if verbose {
         eprintln!("[ebpf] {} cgroups resolved", resolved);
     }
+    if let Some(cg) = cgroup {
+        eprintln!("[ebpf] Filtering: cgroup {cg} only");
+    }
     eprintln!("[ebpf] Press Ctrl+C to stop\n");
 
     let start = Instant::now();
@@ -889,7 +987,11 @@ fn handle_observe(interval: u64, duration: u64, verbose: bool) -> Result<()> {
     loop {
         if last_print.elapsed() >= interval_dur {
             let summary = observer.poll_and_summarize()?;
-            summary.print(observer.identity());
+            if let Some(cg) = cgroup {
+                summary.print_filtered(observer.identity(), cg);
+            } else {
+                summary.print(observer.identity());
+            }
             last_print = Instant::now();
         }
 
@@ -901,7 +1003,11 @@ fn handle_observe(interval: u64, duration: u64, verbose: bool) -> Result<()> {
     }
 
     let summary = observer.poll_and_summarize()?;
-    summary.print(observer.identity());
+    if let Some(cg) = cgroup {
+        summary.print_filtered(observer.identity(), cg);
+    } else {
+        summary.print(observer.identity());
+    }
     observer.detach();
     Ok(())
 }

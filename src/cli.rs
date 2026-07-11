@@ -192,6 +192,10 @@ pub enum Commands {
         /// Duration in seconds (0 = until Ctrl+C)
         #[arg(long, default_value = "0")]
         duration: u64,
+
+        /// Filter: only show this cgroup ID (e.g., 73386)
+        #[arg(long)]
+        cgroup: Option<u32>,
     },
 
     /// Check if your machine supports eBPF
