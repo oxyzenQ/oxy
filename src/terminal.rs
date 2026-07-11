@@ -1,21 +1,22 @@
 // Copyright (C) 2026 rezky_nightky
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Terminal box mode — in-place refresh without scrollback spam.
+//! Terminal alternate screen mode — like htop/vim/less.
 //!
-//! NOT a TUI. Just clears screen + redraws content in place.
-//! Exit with q, ESC, or Ctrl+C.
+//! Uses the terminal's alternate screen buffer (xterm ESC[?1049h).
+//! Content is rendered on the alt screen; when zelynic exits, the
+//! original screen is restored — no trace left in scrollback.
 
 use anyhow::Result;
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
-/// Terminal guard — enters raw mode on creation, restores on drop.
-pub struct RawMode {
+/// Terminal guard — enters alt screen + raw mode, restores on drop.
+pub struct AltScreen {
     original: nix::sys::termios::Termios,
 }
 
-impl RawMode {
+impl AltScreen {
     pub fn enter() -> Result<Self> {
         use nix::sys::termios::*;
         let stdin = io::stdin();
@@ -28,22 +29,26 @@ impl RawMode {
 
         tcsetattr(&stdin, SetArg::TCSANOW, &raw)?;
 
-        // Hide cursor
-        print!("\x1b[?25l");
+        // Enter alternate screen + hide cursor
+        // ESC[?1049h = save cursor + switch to alt screen + clear it
+        // ESC[?25l = hide cursor
+        print!("\x1b[?1049h\x1b[?25l");
         io::stdout().flush()?;
 
-        Ok(RawMode { original })
+        Ok(AltScreen { original })
     }
 }
 
-impl Drop for RawMode {
+impl Drop for AltScreen {
     fn drop(&mut self) {
         use nix::sys::termios::*;
         let stdin = io::stdin();
         let _ = tcsetattr(&stdin, SetArg::TCSANOW, &self.original);
 
-        // Show cursor + clear screen
-        print!("\x1b[?25h\x1b[2J\x1b[H");
+        // Leave alternate screen + show cursor
+        // ESC[?1049l = switch back to main screen + restore cursor
+        // ESC[?25h = show cursor
+        print!("\x1b[?1049l\x1b[?25h");
         let _ = io::stdout().flush();
     }
 }
@@ -59,27 +64,29 @@ pub fn should_quit() -> bool {
     false
 }
 
-/// Clear screen and move cursor to top-left.
+/// Clear screen and move cursor to top-left (on alt screen).
 pub fn clear_screen() {
     print!("\x1b[2J\x1b[H");
 }
 
-/// Run a box-mode loop. Calls `render` every `refresh_interval`, exits on
-/// q/ESC/Ctrl+C or after `duration` (ZERO = forever).
-pub fn run_box<F>(refresh_interval: Duration, duration: Duration, mut render: F)
+/// Run an alternate-screen loop.
+///
+/// Renders content on the alt screen, refreshing every `refresh_interval`.
+/// Exits on q/ESC/Ctrl+C or after `duration` (ZERO = forever).
+/// On exit, the original terminal screen is restored — no trace in scrollback.
+pub fn run_alt<F>(refresh_interval: Duration, duration: Duration, mut render: F)
 where
     F: FnMut(),
 {
-    let _raw = match RawMode::enter() {
+    let _screen = match AltScreen::enter() {
         Ok(g) => g,
         Err(_) => {
-            // Fallback: simple loop without key handling
+            // Fallback: simple loop (no alt screen, no key handling)
             let start = Instant::now();
             loop {
                 clear_screen();
                 render();
                 io::stdout().flush().ok();
-
                 if duration > Duration::ZERO && start.elapsed() >= duration {
                     break;
                 }
@@ -90,7 +97,7 @@ where
     };
 
     let start = Instant::now();
-    let mut last_render = Instant::now();
+    let mut last_render = Instant::now() - refresh_interval; // render immediately on first iteration
 
     loop {
         if should_quit() {

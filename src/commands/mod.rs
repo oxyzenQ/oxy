@@ -1004,7 +1004,7 @@ fn handle_observe(live: Option<&str>, cgroup: Option<u32>, verbose: bool) -> Res
         Duration::ZERO // forever
     };
 
-    terminal::run_box(Duration::from_secs(1), duration, || {
+    terminal::run_alt(Duration::from_secs(1), duration, || {
         let summary = observer.poll_and_summarize().unwrap_or_default();
         println!("━━━ zelynic Observe (press q/ESC to quit) ━━━\n");
         if let Some(cg) = cgroup {
@@ -1058,7 +1058,7 @@ fn handle_top(
             Duration::ZERO // forever
         };
 
-        terminal::run_box(Duration::from_secs(5), dur, || {
+        terminal::run_alt(Duration::from_secs(5), dur, || {
             let summary = observer.poll_and_summarize().unwrap_or_default();
             for c in &summary.cgroups {
                 let entry = cumulative.entry(c.cgroup_id).or_insert((0, 0, 0));
