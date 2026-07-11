@@ -180,11 +180,28 @@ slightly easier to maintain.
 This is intentional. Many projects break after adding "too many features".
 zelynic stays small on purpose.
 
+### Stable API (from v10.0.0)
+
+Starting with v10.0.0, the CLI surface is frozen. No breaking changes
+to commands, flags, or output format. Future releases focus on:
+- Bug fixes
+- Kernel compatibility updates
+- Performance improvements (internal, no API changes)
+
+### Maintenance Mode (from v10.0.0)
+
+> **Zelynic v10 marks the beginning of maintenance mode. Future releases
+> prioritize stability, compatibility, performance, and bug fixes over
+> feature expansion.**
+
+No new features unless critical for security or compatibility.
+Release cadence slows to "when needed".
+
 ## Branches
 
 | Branch | Purpose | Status |
 |--------|---------|--------|
-| `main` | Pure eBPF v5.x (Dragon Architecture) | Active development |
+| `main` | Pure eBPF v10.x (Dragon Architecture) | Maintenance mode |
 | `legacy` | v3.1.1 (tc/nft/systemd-wrapper) | Final legacy release, no new development |
 
 ## Documentation
