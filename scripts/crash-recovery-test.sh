@@ -111,11 +111,11 @@ else
     log_fail "Recover did not clean up pins"
 fi
 
-# Test 5: Apply limit, simulate partial pin state (remove some map pins)
-log_test "Apply limit, simulate partial state (remove schema_version pin)"
+# Test 5: Apply limit, simulate partial pin state (remove one program pin)
+log_test "Apply limit, simulate partial state (remove enforce_dl only)"
 "$BINARY" strict-single curl 100kb 2>/dev/null || true
 sleep 1
-rm -f "$PIN_DIR/schema_version" 2>/dev/null
+rm -f "$PIN_DIR/enforce_dl" 2>/dev/null
 if "$BINARY" status 2>/dev/null | grep -q "Stale"; then
     log_pass "Status detects partial state"
 else
