@@ -125,13 +125,18 @@ cleanup
 
 # Test 5: Lock release on exit — sequential works
 log_test "Lock release on exit — sequential operations work"
-"$BINARY" strict-single curl 100kb 2>/dev/null
-"$BINARY" strict-single curl 200kb 2>/dev/null
+# Use sleep as target — long-lived, won't exit during test
+sleep 600 &
+SLEEP_PID=$!
+SLEEP_COMM=$(cat /proc/$SLEEP_PID/comm 2>/dev/null || echo "sleep")
+"$BINARY" strict-single "$SLEEP_COMM" 100kb 2>/dev/null
+"$BINARY" strict-single "$SLEEP_COMM" 200kb 2>/dev/null
 if "$BINARY" status 2>/dev/null | grep -q "200.0 KB/s"; then
     log_pass "Sequential strict-single works (lock released between calls)"
 else
     log_fail "Second strict-single blocked or failed"
 fi
+kill "$SLEEP_PID" 2>/dev/null || true
 cleanup
 
 # Test 6: Final state — clean
