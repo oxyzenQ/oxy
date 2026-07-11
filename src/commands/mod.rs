@@ -4,6 +4,7 @@
 //! Command handlers for zelynic CLI (Dragon Architecture — pure eBPF).
 
 pub(crate) mod backend;
+pub(crate) mod block;
 pub(crate) mod help;
 
 #[cfg(not(feature = "ebpf"))]
@@ -125,7 +126,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::BlockSingle { target, force }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_block_single(&target, force, cli.verbose)
+                block::handle_block_single(&target, force, cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -138,7 +139,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::BlockMulti { targets, force }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_block_multi(&targets, force, cli.verbose)
+                block::handle_block_multi(&targets, force, cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -151,7 +152,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::BlockAll { force }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_block_all(force, cli.verbose)
+                block::handle_block_all(force, cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -371,7 +372,7 @@ fn is_dangerous_target(name: &str) -> bool {
 
 /// Validate target against dangerous list. Returns Ok if safe, Err if dangerous.
 #[cfg(feature = "ebpf")]
-fn check_dangerous_target(target_str: &str, force: bool) -> Result<()> {
+pub(crate) fn check_dangerous_target(target_str: &str, force: bool) -> Result<()> {
     // Numeric cgroup IDs are always allowed (user knows what they're doing).
     if target_str.parse::<u32>().is_ok() {
         return Ok(());
@@ -745,155 +746,6 @@ fn resolve_rates(
             upload: None,
         })
     }
-}
-
-/// Handle `zelynic block-single` — block an app from the internet.
-/// Writes a policy with rate_bps = 0, which BPF interprets as "drop all".
-#[cfg(feature = "ebpf")]
-fn handle_block_single(target_str: &str, force: bool, verbose: bool) -> Result<()> {
-    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
-
-    if !nix::unistd::geteuid().is_root() {
-        eprintln!("zelynic requires root. Run with sudo.");
-        return Err(anyhow::anyhow!("root required"));
-    }
-
-    // Prevent concurrent operations.
-    let _lock = crate::ebpf::lock::acquire()?;
-    check_dangerous_target(target_str, force)?;
-
-    // Attach BPF programs (pins to /sys/fs/bpf/zelynic/ — survives exit).
-    Limiter::attach(verbose)?;
-
-    // Open pinned maps and write block policy (rate = 0).
-    let mut limiter = Limiter::open_pinned(verbose)?;
-    let target = Target::parse(target_str);
-
-    // rate = 0 means BLOCKED in BPF (schema v3+).
-    let rates = RateSpec {
-        download: Some(0),
-        upload: Some(0),
-    };
-    let applied = limiter.apply_single(&target, &rates)?;
-    if applied == 0 {
-        eprintln!("No cgroup found for '{target_str}'. Nothing to block.");
-        return Ok(());
-    }
-
-    eprintln!("Blocked '{target_str}' from internet ({applied} policies, active in background)");
-    eprintln!("Run 'zelynic unblock {target_str}' to restore access, 'zelynic status' to check.");
-    Ok(())
-}
-
-/// Handle `zelynic block-multi` — block multiple apps from internet.
-#[cfg(feature = "ebpf")]
-fn handle_block_multi(targets_str: &str, force: bool, verbose: bool) -> Result<()> {
-    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
-
-    if !nix::unistd::geteuid().is_root() {
-        eprintln!("zelynic requires root. Run with sudo.");
-        return Err(anyhow::anyhow!("root required"));
-    }
-
-    let _lock = crate::ebpf::lock::acquire()?;
-
-    let targets: Vec<Target> = targets_str.split(':').map(Target::parse).collect();
-    for t in &targets {
-        if let Target::ProcessName(name) = t {
-            check_dangerous_target(name, force)?;
-        }
-    }
-
-    Limiter::attach(verbose)?;
-    let mut limiter = Limiter::open_pinned(verbose)?;
-
-    let rates = RateSpec {
-        download: Some(0),
-        upload: Some(0),
-    };
-    let applied = limiter.apply_group(&targets, &rates)?;
-    if applied == 0 {
-        eprintln!("No cgroups found for '{targets_str}'. Nothing to block.");
-        return Ok(());
-    }
-
-    eprintln!("Blocked '{targets_str}' from internet ({applied} policies, active in background)");
-    eprintln!("Run 'zelynic unblock <target>' to restore access.");
-    Ok(())
-}
-
-/// Handle `zelynic block-all` — block ALL user apps from internet.
-#[cfg(feature = "ebpf")]
-fn handle_block_all(force: bool, verbose: bool) -> Result<()> {
-    use crate::ebpf::identity::IdentityMap;
-    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
-
-    if !nix::unistd::geteuid().is_root() {
-        eprintln!("zelynic requires root. Run with sudo.");
-        return Err(anyhow::anyhow!("root required"));
-    }
-
-    let _lock = crate::ebpf::lock::acquire()?;
-
-    let mut identity = IdentityMap::new();
-    identity.refresh();
-
-    let user_apps: Vec<_> = identity
-        .all()
-        .into_iter()
-        .filter(|e| !e.comm.is_empty() && e.uid > 0)
-        .collect();
-
-    let system_apps: Vec<_> = identity
-        .all()
-        .into_iter()
-        .filter(|e| !e.comm.is_empty() && e.uid == 0)
-        .collect();
-
-    if !force && !system_apps.is_empty() {
-        eprintln!("Blocking {} user app(s)", user_apps.len());
-        eprintln!(
-            "Skipped {} system app(s) (use --force to include):",
-            system_apps.len()
-        );
-        for app in system_apps.iter().take(20) {
-            eprintln!("  - {}", app.comm);
-        }
-    }
-
-    let targets: Vec<Target> = if force {
-        identity
-            .all()
-            .into_iter()
-            .filter(|e| !e.comm.is_empty())
-            .map(|e| Target::CgroupId(e.cgroup_id))
-            .collect()
-    } else {
-        user_apps
-            .iter()
-            .map(|e| Target::CgroupId(e.cgroup_id))
-            .collect()
-    };
-
-    if targets.is_empty() {
-        eprintln!("No apps to block.");
-        return Ok(());
-    }
-
-    Limiter::attach(verbose)?;
-    let mut limiter = Limiter::open_pinned(verbose)?;
-
-    let rates = RateSpec {
-        download: Some(0),
-        upload: Some(0),
-    };
-    let applied = limiter.apply_group(&targets, &rates)?;
-    eprintln!(
-        "Blocked {} app(s) from internet ({applied} policies, active in background)",
-        targets.len()
-    );
-    eprintln!("Run 'zelynic unstrict-all' to restore all access.");
-    Ok(())
 }
 
 #[cfg(feature = "ebpf")]
