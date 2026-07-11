@@ -989,7 +989,7 @@ fn handle_observe(live: Option<&str>, cgroup: Option<u32>, verbose: bool) -> Res
         None => 0, // forever
     };
 
-    let mut observer = Observer::attach()?;
+    let mut observer = Observer::attach_quiet(true)?;
     observer.refresh_identity();
     if verbose {
         eprintln!("[ebpf] {} cgroups resolved", observer.identity().len());
@@ -1040,7 +1040,7 @@ fn handle_top(
         return Err(anyhow::anyhow!("root required"));
     }
 
-    let mut observer = Observer::attach()?;
+    let mut observer = Observer::attach_quiet(true)?;
     observer.refresh_identity();
 
     // Cumulative totals per cgroup (accumulated across all polls)

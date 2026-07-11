@@ -46,13 +46,21 @@ pub struct Observer {
 
 impl Observer {
     pub fn attach() -> Result<Self> {
+        Self::attach_quiet(false)
+    }
+
+    /// Attach with optional quiet mode (suppresses eprintln messages).
+    /// Used by observe/top when running in alt-screen mode.
+    pub fn attach_quiet(quiet: bool) -> Result<Self> {
         let cgroup_path = "/sys/fs/cgroup";
         if !PathBuf::from(cgroup_path).exists() {
             bail!("cgroup v2 not found at {cgroup_path}");
         }
 
         let obj_path = find_bpf_object()?;
-        eprintln!("[ebpf] Loading BPF object from {}", obj_path.display());
+        if !quiet {
+            eprintln!("[ebpf] Loading BPF object from {}", obj_path.display());
+        }
         let obj_data = std::fs::read(&obj_path)
             .context(format!("Failed to read BPF object: {}", obj_path.display()))?;
 
@@ -89,8 +97,10 @@ impl Observer {
             )
             .context("Failed to attach observe_ingress")?;
 
-        eprintln!("[ebpf] Observer attached to {cgroup_path} (egress + ingress)");
-        eprintln!("[ebpf] Monitoring traffic for all processes");
+        if !quiet {
+            eprintln!("[ebpf] Observer attached to {cgroup_path} (egress + ingress)");
+            eprintln!("[ebpf] Monitoring traffic for all processes");
+        }
 
         Ok(Observer {
             bpf: Some(bpf),
@@ -227,16 +237,17 @@ impl Observer {
 
     pub fn detach(&mut self) {
         self.bpf = None;
+    }
+
+    pub fn detach_verbose(&mut self) {
+        self.bpf = None;
         eprintln!("[ebpf] Observer detached from {}", self.cgroup_path);
     }
 }
 
 impl Drop for Observer {
     fn drop(&mut self) {
-        if self.bpf.is_some() {
-            eprintln!("[ebpf] Cleaning up BPF programs");
-            self.bpf = None;
-        }
+        self.bpf = None;
     }
 }
 
