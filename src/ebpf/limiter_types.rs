@@ -125,6 +125,36 @@ pub fn find_bpf_object() -> Result<PathBuf> {
     )
 }
 
+/// Parse a time duration string. Formats: 1s, 3m, 10h, or plain number (seconds).
+/// Returns duration in seconds. 0 = infinity.
+pub fn parse_time_duration(s: &str) -> Result<u64> {
+    let s = s.trim();
+
+    if let Ok(n) = s.parse::<u64>() {
+        return Ok(n);
+    }
+
+    let (num_part, multiplier) = if let Some(v) = s.strip_suffix("h") {
+        (v, 3600u64)
+    } else if let Some(v) = s.strip_suffix("m") {
+        (v, 60u64)
+    } else if let Some(v) = s.strip_suffix("s") {
+        (v, 1u64)
+    } else {
+        bail!(
+            "Invalid duration '{}'. Use format: 1s, 3m, 10h, or plain number (seconds)",
+            s
+        );
+    };
+
+    let n: u64 = num_part
+        .trim()
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid number in duration '{}': {}", s, e))?;
+
+    Ok(n.saturating_mul(multiplier))
+}
+
 /// Parse a rate string. Lowercase units only: kb, mb, gb, b.
 ///
 /// Returns the rate in bytes per second. On overflow (input too large for u64),

@@ -180,41 +180,36 @@ pub enum Commands {
     #[command(name = "list-apps")]
     ListApps,
 
-    /// Real-time traffic monitor (read-only)
+    /// Real-time traffic monitor (box mode, in-place refresh)
     ///
-    /// Shows per-cgroup traffic in real-time. No enforcement.
+    /// Runs in terminal box mode — no scrollback spam. Exit with q/ESC/Ctrl+C.
     #[command(name = "observe")]
     Observe {
-        /// Print summary every N seconds
-        #[arg(long, default_value = "5")]
-        interval: u64,
-
-        /// Duration in seconds (0 = until Ctrl+C)
-        #[arg(long, default_value = "0")]
-        duration: u64,
+        /// Live duration: 1s, 3m, 10h, or 0 (forever). Default: forever.
+        #[arg(long)]
+        live: Option<String>,
 
         /// Filter: only show this cgroup ID (e.g., 73386)
         #[arg(long)]
         cgroup: Option<u32>,
     },
 
-    /// Find top bandwidth consumers (snapshot or live)
+    /// Find top bandwidth consumers (snapshot or live box mode)
     ///
-    /// Collects traffic, shows sorted list of top talkers.
-    /// Use --live for long-running tracking (catches bursty apps).
+    /// Default: 10s snapshot. Use --live for continuous tracking.
     #[command(name = "top")]
     Top {
-        /// Sample duration in seconds (ignored with --live)
-        #[arg(long, default_value = "10")]
-        duration: u64,
+        /// Snapshot duration (without --live): 1s, 3m, 10h. Default: 10s.
+        #[arg(long)]
+        duration: Option<String>,
 
         /// Number of top talkers to show
         #[arg(long, default_value = "10")]
         limit: usize,
 
-        /// Live mode: run until Ctrl+C, accumulate + refresh every 5s
+        /// Live mode: run until q/ESC/Ctrl+C. Optional duration: --live 3m
         #[arg(long)]
-        live: bool,
+        live: Option<String>,
     },
 
     /// Check if your machine supports eBPF

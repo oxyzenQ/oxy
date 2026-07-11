@@ -9,6 +9,7 @@ mod commands;
 mod ebpf;
 mod ebpf_legacy;
 mod info;
+mod terminal;
 mod update;
 
 use anyhow::Result;

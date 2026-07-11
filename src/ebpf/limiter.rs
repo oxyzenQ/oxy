@@ -27,8 +27,8 @@ use crate::ebpf::limiter_types::{
 
 // Re-export public types/functions for external use.
 pub use crate::ebpf::limiter_types::{
-    format_bytes, format_rate, parse_rate, validate_rate, Direction, LimiterStatsRaw, PolicyRaw,
-    RateSpec, Target, MAX_RATE, MIN_RATE,
+    format_bytes, format_rate, parse_rate, parse_time_duration, validate_rate, Direction,
+    LimiterStatsRaw, PolicyRaw, RateSpec, Target, MAX_RATE, MIN_RATE,
 };
 
 // ━━ Pin paths — single source of truth ━━

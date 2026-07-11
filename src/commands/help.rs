@@ -67,18 +67,20 @@ pub(crate) fn print_help_all() {
         "zelynic list-apps".green()
     );
     println!(
-        "  {} — Real-time traffic monitor (read-only, UL+DL)",
-        "zelynic observe [--cgroup <id>]".green()
+        "  {} — Real-time traffic monitor (box mode, in-place)",
+        "zelynic observe [--live <dur>] [--cgroup <id>]".green()
     );
-    println!("    sudo zelynic observe --interval 3              # all traffic");
-    println!("    sudo zelynic observe --cgroup 8066 --interval 2 # filter to one cgroup");
+    println!("    sudo zelynic observe                    # live forever, q/ESC to quit");
+    println!("    sudo zelynic observe --live 3m           # live for 3 minutes");
+    println!("    sudo zelynic observe --cgroup 8066       # filter to one cgroup");
     println!(
-        "  {} — Find top bandwidth consumers (snapshot or live)",
-        "zelynic top [--duration N] [--limit N] [--live]".green()
+        "  {} — Find top bandwidth consumers",
+        "zelynic top [--duration <dur>] [--live <dur>] [--limit N]".green()
     );
-    println!("    sudo zelynic top                              # 10s snapshot, top 10");
-    println!("    sudo zelynic top --duration 30 --limit 5      # 30s snapshot, top 5");
-    println!("    sudo zelynic top --live                       # live until Ctrl+C (catches bursty apps)");
+    println!("    sudo zelynic top                        # 10s snapshot, top 10");
+    println!("    sudo zelynic top --duration 30s         # 30s snapshot");
+    println!("    sudo zelynic top --live 5m              # live box mode for 5 min");
+    println!("    sudo zelynic top --live 0               # live forever (catches bursty apps)");
     println!("  {} — Check eBPF support", "zelynic doctor".green());
     println!();
     println!("{}", "Global flags:".cyan().bold());
@@ -120,11 +122,11 @@ pub(crate) fn print_help_all() {
     println!("  # JSON output (for scripts)");
     println!("  sudo zelynic status --print-json | jq '.limits[]'");
     println!();
-    println!("  # Monitor traffic (UL + DL)");
-    println!("  sudo zelynic observe --interval 3");
+    println!("  # Monitor traffic in box mode (UL + DL)");
+    println!("  sudo zelynic observe --live 5m");
     println!();
     println!("  # Find what's eating your bandwidth");
-    println!("  sudo zelynic top --duration 30");
+    println!("  sudo zelynic top --live 0");
     println!();
     println!("  # Recover from crash (clean orphaned pins)");
     println!("  sudo zelynic recover");

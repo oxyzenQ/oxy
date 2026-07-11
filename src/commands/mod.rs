@@ -183,18 +183,14 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
-        Some(Commands::Observe {
-            interval,
-            duration,
-            cgroup,
-        }) => {
+        Some(Commands::Observe { live, cgroup }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_observe(interval, duration, cgroup, cli.verbose)
+                handle_observe(live.as_deref(), cgroup, cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
-                let _ = (interval, duration, cgroup, cli.verbose);
+                let _ = (live, cgroup, cli.verbose);
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
                 Err(anyhow::anyhow!("eBPF feature not enabled"))
             }
@@ -207,7 +203,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_top(duration, limit, live, cli.verbose)
+                handle_top(duration.as_deref(), limit, live.as_deref(), cli.verbose)
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -978,65 +974,64 @@ fn handle_list_apps(json: bool) -> Result<()> {
 }
 
 #[cfg(feature = "ebpf")]
-fn handle_observe(interval: u64, duration: u64, cgroup: Option<u32>, verbose: bool) -> Result<()> {
+fn handle_observe(live: Option<&str>, cgroup: Option<u32>, verbose: bool) -> Result<()> {
     use crate::ebpf::loader::Observer;
-    use std::time::{Duration, Instant};
+    use crate::terminal;
+    use std::time::Duration;
 
     if !nix::unistd::geteuid().is_root() {
         eprintln!("zelynic requires root. Run with sudo.");
         return Err(anyhow::anyhow!("root required"));
     }
 
+    let duration_secs = match live {
+        Some(s) => crate::ebpf::limiter::parse_time_duration(s)?,
+        None => 0, // forever
+    };
+
     let mut observer = Observer::attach()?;
-    let resolved = observer.refresh_identity();
+    observer.refresh_identity();
     if verbose {
-        eprintln!("[ebpf] {} cgroups resolved", resolved);
-    }
-    if let Some(cg) = cgroup {
-        eprintln!("[ebpf] Filtering: cgroup {cg} only");
-    }
-    eprintln!("[ebpf] Press Ctrl+C to stop\n");
-
-    let start = Instant::now();
-    let interval_dur = Duration::from_secs(interval);
-    let mut last_print = Instant::now();
-
-    loop {
-        if last_print.elapsed() >= interval_dur {
-            let summary = observer.poll_and_summarize()?;
-            if let Some(cg) = cgroup {
-                summary.print_filtered(observer.identity(), cg);
-            } else {
-                summary.print(observer.identity());
-            }
-            last_print = Instant::now();
-        }
-
-        if duration > 0 && start.elapsed() >= Duration::from_secs(duration) {
-            break;
-        }
-
-        std::thread::sleep(Duration::from_millis(200));
+        eprintln!("[ebpf] {} cgroups resolved", observer.identity().len());
     }
 
-    let summary = observer.poll_and_summarize()?;
-    if let Some(cg) = cgroup {
-        summary.print_filtered(observer.identity(), cg);
+    // Establish baseline
+    let _ = observer.poll_and_summarize()?;
+
+    let duration = if duration_secs > 0 {
+        Duration::from_secs(duration_secs)
     } else {
-        summary.print(observer.identity());
-    }
+        Duration::ZERO // forever
+    };
+
+    terminal::run_box(Duration::from_secs(1), duration, || {
+        let summary = observer.poll_and_summarize().unwrap_or_default();
+        println!("━━━ zelynic Observe (press q/ESC to quit) ━━━\n");
+        if let Some(cg) = cgroup {
+            summary.print_filtered(observer.identity(), cg);
+        } else {
+            summary.print(observer.identity());
+        }
+    });
+
     observer.detach();
     Ok(())
 }
 
-/// Handle `zelynic top` — snapshot or live top bandwidth consumers.
+/// Handle `zelynic top` — snapshot or live box mode.
 ///
-/// Snapshot mode (default): collect for N seconds, show sorted list, exit.
-/// Live mode (--live): run until Ctrl+C, accumulate + refresh every 5s.
-///   Catches bursty apps that transmit intermittently.
+/// Default: 10s snapshot (prints once, exits).
+/// --live: box mode, in-place refresh, accumulate, q/ESC to quit.
+/// --live 3m: box mode for 3 minutes, then exit.
 #[cfg(feature = "ebpf")]
-fn handle_top(duration: u64, limit: usize, live: bool, _verbose: bool) -> Result<()> {
+fn handle_top(
+    duration: Option<&str>,
+    limit: usize,
+    live: Option<&str>,
+    _verbose: bool,
+) -> Result<()> {
     use crate::ebpf::loader::Observer;
+    use crate::terminal;
     use std::collections::HashMap;
     use std::time::{Duration, Instant};
 
@@ -1049,44 +1044,45 @@ fn handle_top(duration: u64, limit: usize, live: bool, _verbose: bool) -> Result
     observer.refresh_identity();
 
     // Cumulative totals per cgroup (accumulated across all polls)
-    let mut cumulative: HashMap<u32, (u64, u64, u64)> = HashMap::new(); // (dl, ul, pkt)
+    let mut cumulative: HashMap<u32, (u64, u64, u64)> = HashMap::new();
 
     // First poll to establish baseline
     let _ = observer.poll_and_summarize()?;
 
-    if live {
-        eprintln!("━━━ zelynic Top — LIVE (Ctrl+C to stop) ━━━");
-        eprintln!("  Accumulating traffic... refreshing every 5s\n");
+    if let Some(live_str) = live {
+        // Live box mode
+        let duration_secs = crate::ebpf::limiter::parse_time_duration(live_str)?;
+        let dur = if duration_secs > 0 {
+            Duration::from_secs(duration_secs)
+        } else {
+            Duration::ZERO // forever
+        };
 
-        let refresh_interval = Duration::from_secs(5);
-        let mut last_refresh = Instant::now();
-
-        loop {
-            std::thread::sleep(Duration::from_millis(500));
-            let summary = observer.poll_and_summarize()?;
-
-            // Accumulate deltas into cumulative totals
+        terminal::run_box(Duration::from_secs(5), dur, || {
+            let summary = observer.poll_and_summarize().unwrap_or_default();
             for c in &summary.cgroups {
                 let entry = cumulative.entry(c.cgroup_id).or_insert((0, 0, 0));
-                entry.0 += c.ingress_bytes; // dl
-                entry.1 += c.bytes; // ul
+                entry.0 += c.ingress_bytes;
+                entry.1 += c.bytes;
                 entry.2 += c.packets + c.ingress_packets;
             }
-
-            if last_refresh.elapsed() >= refresh_interval {
-                print_top_table(&cumulative, limit, observer.identity(), "LIVE");
-                last_refresh = Instant::now();
-            }
-        }
+            println!("━━━ zelynic Top — LIVE (press q/ESC to quit) ━━━\n");
+            print_top_table(&cumulative, limit, observer.identity(), "accumulated");
+        });
     } else {
-        eprintln!("━━━ zelynic Top — sampling for {duration}s ━━━");
+        // Snapshot mode
+        let dur_secs = match duration {
+            Some(s) => crate::ebpf::limiter::parse_time_duration(s)?,
+            None => 10,
+        };
+
+        eprintln!("━━━ zelynic Top — sampling for {dur_secs}s ━━━");
         eprintln!("  (collecting traffic data...)\n");
 
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(duration) {
+        while start.elapsed() < Duration::from_secs(dur_secs) {
             std::thread::sleep(Duration::from_millis(500));
             let summary = observer.poll_and_summarize()?;
-
             for c in &summary.cgroups {
                 let entry = cumulative.entry(c.cgroup_id).or_insert((0, 0, 0));
                 entry.0 += c.ingress_bytes;
@@ -1099,7 +1095,7 @@ fn handle_top(duration: u64, limit: usize, live: bool, _verbose: bool) -> Result
             &cumulative,
             limit,
             observer.identity(),
-            &format!("{duration}s sample"),
+            &format!("{dur_secs}s sample"),
         );
     }
 
