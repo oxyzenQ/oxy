@@ -35,8 +35,10 @@ unsafe impl aya::Pod for CgroupStatsRaw {}
 pub struct Observer {
     bpf: Option<Ebpf>,
     cgroup_path: String,
-    /// Previous stats for delta calculation.
+    /// Previous egress stats for delta calculation.
     prev_stats: std::collections::HashMap<u32, CgroupStatsRaw>,
+    /// Previous ingress stats for delta calculation.
+    prev_stats_ingress: std::collections::HashMap<u32, CgroupStatsRaw>,
     /// Dragon Architecture Layer 2: cgroup ID → process identity resolver.
     /// Refreshed lazily via `maybe_refresh()` before each summary print.
     identity: IdentityMap,
@@ -56,33 +58,45 @@ impl Observer {
 
         let mut bpf = Ebpf::load(&obj_data).context("Failed to load BPF object")?;
 
-        let program: &mut CgroupSkb = bpf
-            .program_mut("observe_egress")
-            .context("BPF program 'observe_egress' not found")?
-            .try_into()?;
-
-        program.load()?;
-
         let cgroup_file =
             File::open(cgroup_path).context("Failed to open cgroup root directory")?;
 
-        let _link_id = program
+        // Load + attach egress observer
+        let egress_prog: &mut CgroupSkb = bpf
+            .program_mut("observe_egress")
+            .context("BPF program 'observe_egress' not found")?
+            .try_into()?;
+        egress_prog.load()?;
+        egress_prog
             .attach(
-                cgroup_file,
+                cgroup_file.try_clone()?,
                 CgroupSkbAttachType::Egress,
                 CgroupAttachMode::default(),
             )
-            .context("Failed to attach BPF program to cgroup")?;
+            .context("Failed to attach observe_egress")?;
 
-        // link_id is stored internally by aya — program stays attached
-        // as long as the Ebpf object is alive
-        eprintln!("[ebpf] Observer attached to {cgroup_path}");
-        eprintln!("[ebpf] Monitoring egress traffic for all processes");
+        // Load + attach ingress observer
+        let ingress_prog: &mut CgroupSkb = bpf
+            .program_mut("observe_ingress")
+            .context("BPF program 'observe_ingress' not found")?
+            .try_into()?;
+        ingress_prog.load()?;
+        ingress_prog
+            .attach(
+                cgroup_file,
+                CgroupSkbAttachType::Ingress,
+                CgroupAttachMode::default(),
+            )
+            .context("Failed to attach observe_ingress")?;
+
+        eprintln!("[ebpf] Observer attached to {cgroup_path} (egress + ingress)");
+        eprintln!("[ebpf] Monitoring traffic for all processes");
 
         Ok(Observer {
             bpf: Some(bpf),
             cgroup_path: cgroup_path.to_string(),
             prev_stats: std::collections::HashMap::new(),
+            prev_stats_ingress: std::collections::HashMap::new(),
             identity: IdentityMap::new(),
         })
     }
@@ -103,7 +117,7 @@ impl Observer {
         self.identity.maybe_refresh()
     }
 
-    /// Read cgroup_counters map directly. Returns (cgroup_id, stats) pairs.
+    /// Read egress cgroup_counters map. Returns (cgroup_id, stats) pairs.
     pub fn read_counters(&self) -> Result<Vec<(u32, CgroupStatsRaw)>> {
         let bpf = self.bpf.as_ref().context("BPF not loaded")?;
         let map: BpfHashMap<_, u32, CgroupStatsRaw> =
@@ -117,12 +131,30 @@ impl Observer {
         Ok(results)
     }
 
-    /// Read counters, compute deltas, return summary.
+    /// Read ingress cgroup_counters_ingress map. Returns (cgroup_id, stats) pairs.
+    pub fn read_counters_ingress(&self) -> Result<Vec<(u32, CgroupStatsRaw)>> {
+        let bpf = self.bpf.as_ref().context("BPF not loaded")?;
+        let map: BpfHashMap<_, u32, CgroupStatsRaw> = BpfHashMap::try_from(
+            bpf.map("cgroup_counters_ingress")
+                .context("map not found")?,
+        )
+        .context("Failed to access cgroup_counters_ingress map")?;
+
+        let mut results = Vec::new();
+        for (key, value) in map.iter().flatten() {
+            results.push((key, value));
+        }
+        Ok(results)
+    }
+
+    /// Read counters (egress + ingress), compute deltas, return summary.
     pub fn poll_and_summarize(&mut self) -> Result<CounterSummary> {
-        let current = self.read_counters()?;
+        let current_egress = self.read_counters()?;
+        let current_ingress = self.read_counters_ingress().unwrap_or_default();
         let mut summary = CounterSummary::default();
 
-        for (cgroup_id, stats) in &current {
+        // Process egress (upload) deltas
+        for (cgroup_id, stats) in &current_egress {
             let prev = self.prev_stats.get(cgroup_id).copied().unwrap_or_default();
             let delta_packets = stats.packets.saturating_sub(prev.packets);
             let delta_bytes = stats.bytes.saturating_sub(prev.bytes);
@@ -136,18 +168,58 @@ impl Observer {
                     bytes: delta_bytes,
                     total_packets: stats.packets,
                     total_bytes: stats.bytes,
+                    ingress_packets: 0,
+                    ingress_bytes: 0,
                 });
+            }
+        }
+
+        // Merge ingress (download) deltas into existing cgroups
+        for (cgroup_id, stats) in &current_ingress {
+            let prev = self
+                .prev_stats_ingress
+                .get(cgroup_id)
+                .copied()
+                .unwrap_or_default();
+            let delta_packets = stats.packets.saturating_sub(prev.packets);
+            let delta_bytes = stats.bytes.saturating_sub(prev.bytes);
+
+            if delta_packets > 0 {
+                summary.total_ingress_packets += delta_packets;
+                summary.total_ingress_bytes += delta_bytes;
+
+                if let Some(entry) = summary
+                    .cgroups
+                    .iter_mut()
+                    .find(|c| c.cgroup_id == *cgroup_id)
+                {
+                    entry.ingress_packets = delta_packets;
+                    entry.ingress_bytes = delta_bytes;
+                } else {
+                    summary.cgroups.push(CgroupDelta {
+                        cgroup_id: *cgroup_id,
+                        packets: 0,
+                        bytes: 0,
+                        total_packets: 0,
+                        total_bytes: 0,
+                        ingress_packets: delta_packets,
+                        ingress_bytes: delta_bytes,
+                    });
+                }
             }
         }
 
         // Update prev_stats
         self.prev_stats.clear();
-        for (cgroup_id, stats) in current {
+        for (cgroup_id, stats) in current_egress {
             self.prev_stats.insert(cgroup_id, stats);
         }
+        self.prev_stats_ingress.clear();
+        for (cgroup_id, stats) in current_ingress {
+            self.prev_stats_ingress.insert(cgroup_id, stats);
+        }
 
-        // Refresh identity map if stale — ensures labels stay current
-        // with process churn without paying the /proc walk cost every poll.
+        // Refresh identity map if stale
         self.maybe_refresh_identity();
 
         Ok(summary)
@@ -172,6 +244,8 @@ impl Drop for Observer {
 pub struct CounterSummary {
     pub total_packets: u64,
     pub total_bytes: u64,
+    pub total_ingress_packets: u64,
+    pub total_ingress_bytes: u64,
     pub cgroups: Vec<CgroupDelta>,
 }
 
@@ -182,6 +256,8 @@ pub struct CgroupDelta {
     pub bytes: u64,
     pub total_packets: u64,
     pub total_bytes: u64,
+    pub ingress_packets: u64,
+    pub ingress_bytes: u64,
 }
 
 impl CounterSummary {
@@ -190,14 +266,22 @@ impl CounterSummary {
     /// Dragon Architecture Layer 3: Aggregation enriches raw counters with
     /// identity (Layer 2) before presentation (Layer 4).
     pub fn print(&self, identity: &IdentityMap) {
-        if self.total_packets == 0 {
+        if self.total_packets == 0 && self.total_ingress_packets == 0 {
             println!("\n  (no traffic since last check)");
             return;
         }
 
         println!("\n━━━ eBPF Traffic Summary ━━━");
-        println!("  Packets:  {}", self.total_packets);
-        println!("  Bytes:    {}", format_bytes(self.total_bytes));
+        println!(
+            "  Egress (upload):  {} packets, {}",
+            self.total_packets,
+            format_bytes(self.total_bytes)
+        );
+        println!(
+            "  Ingress (download): {} packets, {}",
+            self.total_ingress_packets,
+            format_bytes(self.total_ingress_bytes)
+        );
         println!("  Cgroups:  {}", self.cgroups.len());
         if !identity.is_empty() {
             println!("  Resolved: {} cgroup identities", identity.len());
@@ -205,21 +289,30 @@ impl CounterSummary {
         println!();
 
         let mut sorted = self.cgroups.clone();
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.bytes));
+        sorted.sort_by_key(|c| std::cmp::Reverse(c.bytes + c.ingress_bytes));
 
         println!(
-            "  {:<30} {:>10} {:>10} {:>12}",
-            "CGROUP", "DELTA PKT", "DELTA BYTES", "TOTAL BYTES"
+            "  {:<30} {:>12} {:>12}",
+            "CGROUP", "EGRESS (UL)", "INGRESS (DL)"
         );
-        println!("  {}", "─".repeat(66));
+        println!("  {}", "─".repeat(58));
 
         for c in sorted.iter().take(20) {
+            let ul_str = if c.bytes > 0 {
+                format!("{} ({})", c.packets, format_bytes(c.bytes))
+            } else {
+                "—".to_string()
+            };
+            let dl_str = if c.ingress_bytes > 0 {
+                format!("{} ({})", c.ingress_packets, format_bytes(c.ingress_bytes))
+            } else {
+                "—".to_string()
+            };
             println!(
-                "  {:<30} {:>10} {:>10} {:>12}",
+                "  {:<30} {:>12} {:>12}",
                 identity.label(c.cgroup_id),
-                c.packets,
-                format_bytes(c.bytes),
-                format_bytes(c.total_bytes),
+                ul_str,
+                dl_str,
             );
         }
     }

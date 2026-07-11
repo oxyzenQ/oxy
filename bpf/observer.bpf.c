@@ -43,12 +43,21 @@ struct cgroup_stats {
     __u64 last_event_packet; // packet count at last event emission
 };
 
+// Egress counters
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 256);
     __type(key, __u32);
     __type(value, struct cgroup_stats);
 } cgroup_counters SEC(".maps");
+
+// Ingress counters
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, struct cgroup_stats);
+} cgroup_counters_ingress SEC(".maps");
 
 SEC("cgroup_skb/egress")
 int observe_egress(struct __sk_buff *skb) {
@@ -125,7 +134,7 @@ int observe_egress(struct __sk_buff *skb) {
     e->pid        = pid;
     e->uid        = uid;
     e->protocol   = protocol;
-    e->direction  = 0;
+    e->direction  = 0; // egress (upload)
     e->pkt_len    = pkt_len;
     e->src_ip     = src_ip;
     e->dst_ip     = dst_ip;
@@ -133,6 +142,29 @@ int observe_egress(struct __sk_buff *skb) {
     e->dst_port   = dst_port;
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
     bpf_ringbuf_submit(e, 0);
+
+    return 1;
+}
+
+SEC("cgroup_skb/ingress")
+int observe_ingress(struct __sk_buff *skb) {
+    __u64 cgid      = bpf_skb_cgroup_id(skb);
+    __u32 cgroup_id = (__u32)cgid;
+    __u32 pkt_len   = skb->len;
+
+    // Update ingress counters
+    struct cgroup_stats *stats =
+        bpf_map_lookup_elem(&cgroup_counters_ingress, &cgroup_id);
+    if (stats) {
+        stats->packets += 1;
+        stats->bytes += pkt_len;
+    } else {
+        struct cgroup_stats init = {};
+        init.packets             = 1;
+        init.bytes               = pkt_len;
+        bpf_map_update_elem(&cgroup_counters_ingress, &cgroup_id, &init,
+                            BPF_ANY);
+    }
 
     return 1;
 }
