@@ -9,6 +9,7 @@ mod commands;
 mod ebpf;
 mod ebpf_legacy;
 mod info;
+#[cfg(feature = "ebpf")]
 mod terminal;
 mod update;
 

@@ -4,9 +4,12 @@
 //! Command handlers for zelynic CLI (Dragon Architecture — pure eBPF).
 
 pub(crate) mod backend;
+#[cfg(feature = "ebpf")]
 pub(crate) mod block;
+#[cfg(feature = "ebpf")]
 pub(crate) mod cleanup;
 pub(crate) mod help;
+#[cfg(feature = "ebpf")]
 pub(crate) mod monitor;
 
 #[cfg(not(feature = "ebpf"))]
