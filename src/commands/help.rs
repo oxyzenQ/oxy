@@ -67,9 +67,11 @@ pub(crate) fn print_help_all() {
         "zelynic list-apps".green()
     );
     println!(
-        "  {} — Real-time traffic monitor (read-only)",
-        "zelynic observe".green()
+        "  {} — Real-time traffic monitor (read-only, UL+DL)",
+        "zelynic observe [--cgroup <id>]".green()
     );
+    println!("    sudo zelynic observe --interval 3              # all traffic");
+    println!("    sudo zelynic observe --cgroup 8066 --interval 2 # filter to one cgroup");
     println!("  {} — Check eBPF support", "zelynic doctor".green());
     println!();
     println!("{}", "Global flags:".cyan().bold());
@@ -107,6 +109,15 @@ pub(crate) fn print_help_all() {
     println!();
     println!("  # Check what's limited");
     println!("  sudo zelynic status");
+    println!();
+    println!("  # JSON output (for scripts)");
+    println!("  sudo zelynic status --print-json | jq '.limits[]'");
+    println!();
+    println!("  # Monitor traffic (UL + DL)");
+    println!("  sudo zelynic observe --interval 3");
+    println!();
+    println!("  # Recover from crash (clean orphaned pins)");
+    println!("  sudo zelynic recover");
     println!();
     println!("  # Emergency: remove all limits");
     println!("  sudo zelynic unstrict-all");
