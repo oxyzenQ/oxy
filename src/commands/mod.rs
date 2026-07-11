@@ -342,6 +342,8 @@ fn handle_strict_single(
         return Err(anyhow::anyhow!("root required"));
     }
 
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
     check_dangerous_target(target_str, force)?;
 
     let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
@@ -388,6 +390,8 @@ fn handle_strict_multi(
         return Err(anyhow::anyhow!("root required"));
     }
 
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
     // Check each target for dangerous names.
     for t in targets_str.split(':') {
         let t = t.trim();
@@ -462,6 +466,8 @@ fn handle_all_limit(
         return Err(anyhow::anyhow!("root required"));
     }
 
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
     let rates = resolve_rates(rate, download, upload, allow_dangerous)?;
 
     if rates.download.is_none() && rates.upload.is_none() {
@@ -681,6 +687,8 @@ fn handle_unstrict(target_str: &str, verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
     if !crate::ebpf::limiter::Limiter::is_pinned() {
         eprintln!("No active limits. Nothing to remove.");
         return Ok(());
@@ -723,6 +731,9 @@ fn handle_unstrict_all(_verbose: bool) -> Result<()> {
         return Err(anyhow::anyhow!("root required"));
     }
 
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
+
     // Check if pin directory has any files. Can't rely on is_pinned() because
     // stale pins from old versions (before link pinning) fail the 4-file check
     // but still need cleanup.
@@ -748,6 +759,9 @@ fn handle_recover(verbose: bool) -> Result<()> {
         eprintln!("zelynic requires root. Run with sudo.");
         return Err(anyhow::anyhow!("root required"));
     }
+
+    // Prevent concurrent operations (race condition elimination).
+    let _lock = crate::ebpf::lock::acquire()?;
 
     eprintln!("━━━ zelynic Crash Recovery ━━━");
 

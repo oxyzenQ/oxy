@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] — 2026-07-11
+
+### Reliability & Endurance
+
+v6.0.0 focuses on proving zelynic survives long-running production use.
+Introduces file locking to prevent concurrent operation corruption,
+plus comprehensive race condition + reload test suites.
+
+#### Race Condition Elimination
+
+- **feat: file lock (`src/ebpf/lock.rs`)** — prevents concurrent zelynic
+  operations from corrupting BPF state. Uses `flock(2)` on
+  `/tmp/zelynic.lock` (non-blocking). Lock is automatically released on
+  process exit (including crash, panic, SIGKILL).
+
+  Before: two terminals running `strict-single` + `unstrict-all`
+  simultaneously could corrupt BPF state (map deleted while policy
+  being written → ENOENT).
+
+  After: second operation gets "another zelynic operation is in progress"
+  error. User waits or runs `recover` if lock is stale.
+
+  Lock is acquired in all write-mode handlers:
+  `strict-single`, `strict-multi`, `all-limit`, `unstrict`,
+  `unstrict-all`, `recover`.
+
+#### Test Suites
+
+- **test: `race-condition-test.sh`** — 6-test suite:
+  1. Concurrent strict-single (5 parallel) — lock serializes
+  2. Concurrent unstrict-all (5 parallel) — no crash
+  3. Mixed strict-single + unstrict-all — no corruption
+  4. Rapid strict → unstrict → strict cycle (10x)
+  5. Lock release on exit — sequential works
+  6. Final state verification
+
+- **test: `reload-test.sh`** — 5-test suite:
+  1. Apply limit, change rate during traffic — no crash
+  2. Unstrict → re-apply — no gap
+  3. Rapid rate changes (100kb → 500kb → 1mb → 100kb)
+  4. Change rate while packets being dropped
+  5. Final state verification
+
+- **test: enhanced `long-endurance-test.sh`** — added memory monitoring:
+  - RSS (resident set size) tracking per check
+  - Memory leak detection (>1MB growth = warning)
+  - Initial RSS baseline for comparison
+
+#### Branch Cleanup
+
+- **chore: deleted `wolf-architecture` branch** — superseded by `main`
+  after Dragon Architecture merge. Branches now: `main` (pure eBPF v6.x)
+  + `legacy` (v3.1.1 tc/nft).
+
+#### Verification
+
+- 46 unit tests pass (including new lock test)
+- 4 integration tests pass
+- Race condition tests: 6/6 pass
+- Reload tests: 5/5 pass
+- Crash recovery tests: 9/9 pass
+- `cargo clippy --features ebpf -- -D warnings` → 0 warnings
+- `clang-format --dry-run --Werror bpf/*.c` → 0 violations
+- `scripts/check-policy.py` → 0 failures
+
+---
+
 ## [5.0.0] — 2026-07-11
 
 ### Cross Distribution Stability

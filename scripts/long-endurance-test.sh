@@ -63,6 +63,25 @@ sleep 3
 
 CHECK_COUNT=0
 FAIL_COUNT=0
+INITIAL_RSS=0
+
+# Get RSS (resident set size) of a process in KB
+get_rss() {
+    local pid=$1
+    local rss
+    rss=$(grep VmRSS /proc/$pid/status 2>/dev/null | awk '{print $2}')
+    echo "${rss:-0}"
+}
+
+# Get total BPF map memory usage from bpftool
+get_bpf_mem() {
+    local total=0
+    while IFS= read -r line; do
+        size=$(echo "$line" | grep -oP 'bytes_used:\s+\K\d+' || echo 0)
+        total=$((total + size))
+    done < <(bpftool map show 2>/dev/null | grep "zelynic" -A5 || true)
+    echo "$total"
+}
 
 while [[ $(date +%s) -lt $END_TIME ]]; do
     CHECK_COUNT=$((CHECK_COUNT + 1))
@@ -75,16 +94,37 @@ while [[ $(date +%s) -lt $END_TIME ]]; do
     # Health check
     STATUS=$($BINARY status 2>&1)
 
+    # Memory check — RSS of any zelynic process (should be 0 after fire-and-forget)
+    ZELYNIC_PIDS=$(pgrep -f "$BINARY" 2>/dev/null || true)
+    RSS_TOTAL=0
+    for pid in $ZELYNIC_PIDS; do
+        RSS=$(get_rss "$pid")
+        RSS_TOTAL=$((RSS_TOTAL + RSS))
+    done
+
+    # Track initial RSS for comparison
+    if [[ $CHECK_COUNT -eq 1 ]]; then
+        INITIAL_RSS=$RSS_TOTAL
+    fi
+
     if echo "$STATUS" | grep -q "Active limits"; then
-        # Get stats
         ALLOWED=$(echo "$STATUS" | grep 'cg:' | head -1 | awk '{print $(NF-1)}' || echo "?")
         DROPPED=$(echo "$STATUS" | grep 'cg:' | head -1 | awk '{print $NF}' || echo "?")
-        echo "  [${ELAPSED_H}h ${ELAPSED_M}m ${ELAPSED_S}s] ✓ Active | allowed=$ALLOWED dropped=$DROPPED"
+        echo "  [${ELAPSED_H}h ${ELAPSED_M}m ${ELAPSED_S}s] ✓ Active | allowed=$ALLOWED dropped=$DROPPED | RSS=${RSS_TOTAL}KB"
     else
         echo "  [${ELAPSED_H}h ${ELAPSED_M}m ${ELAPSED_S}s] ✗ LIMIT LOST — re-applying..."
         $BINARY strict-single "$SLEEP_COMM" 500kb 2>&1
         FAIL_COUNT=$((FAIL_COUNT + 1))
         sleep 3
+    fi
+
+    # Memory leak check every 10 checks
+    if [[ $((CHECK_COUNT % 10)) -eq 0 ]] && [[ $INITIAL_RSS -gt 0 ]]; then
+        GROWTH=$((RSS_TOTAL - INITIAL_RSS))
+        if [[ $GROWTH -gt 1024 ]]; then  # > 1MB growth = potential leak
+            echo "  ⚠ MEMORY: RSS grew ${GROWTH}KB since start (possible leak)"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
     fi
 
     # Check for orphan maps every 10 checks
