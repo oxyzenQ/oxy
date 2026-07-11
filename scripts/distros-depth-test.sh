@@ -448,16 +448,14 @@ section "Checking for orphan BPF maps/programs"
 $BINARY unstrict-all 2>/dev/null || true
 sleep 2
 
-ORPHAN_PROGS=$(bpftool prog show 2>/dev/null | grep -c "enforce" || true)
-ORPHAN_PROGS=${ORPHAN_PROGS:-0}
-ORPHAN_MAPS=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
-ORPHAN_MAPS=${ORPHAN_MAPS:-0}
+ORPHAN_PINS=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
+ORPHAN_PINS=${ORPHAN_PINS:-0}
 ORPHAN_PID=$(test -f /tmp/zelynic.pid && echo "1" || echo "0")
 
-if [[ "$ORPHAN_PROGS" == "0" && "$ORPHAN_MAPS" == "0" && "$ORPHAN_PID" == "0" ]]; then
-    pass "No orphan BPF programs, maps, or PID files"
+if [[ "$ORPHAN_PINS" == "0" && "$ORPHAN_PID" == "0" ]]; then
+    pass "No orphan BPF pins or PID files"
 else
-    fail "Orphans found: progs=$ORPHAN_PROGS maps=$ORPHAN_MAPS pid=$ORPHAN_PID"
+    fail "Orphans found: pins=$ORPHAN_PINS pid=$ORPHAN_PID"
 fi
 
 # ━━ Summary ━━

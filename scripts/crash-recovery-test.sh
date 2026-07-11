@@ -93,9 +93,9 @@ else
     log_fail "BPF not active after strict-single"
 fi
 
-# Test 3: Simulate crash — remove link pins only (stale state)
-log_test "Simulate crash — remove link pins (stale state)"
-rm -f "$PIN_DIR/enforce_dl_link" "$PIN_DIR/enforce_ul_link" 2>/dev/null
+# Test 3: Simulate crash — remove program pins (stale state)
+log_test "Simulate crash — remove program pins (stale state)"
+rm -f "$PIN_DIR/enforce_dl" "$PIN_DIR/enforce_ul" 2>/dev/null
 if "$BINARY" status 2>/dev/null | grep -q "Stale"; then
     log_pass "Status detects stale state"
 else
@@ -111,11 +111,11 @@ else
     log_fail "Recover did not clean up pins"
 fi
 
-# Test 5: Apply limit, simulate partial pin state (remove programs only)
-log_test "Apply limit, simulate partial state (remove programs)"
+# Test 5: Apply limit, simulate partial pin state (remove maps only)
+log_test "Apply limit, simulate partial state (remove maps)"
 "$BINARY" strict-single curl 100kb 2>/dev/null || true
 sleep 1
-rm -f "$PIN_DIR/enforce_dl" "$PIN_DIR/enforce_ul" 2>/dev/null
+rm -f "$PIN_DIR/cgroup_policy_dl" "$PIN_DIR/cgroup_policy_ul" 2>/dev/null
 if "$BINARY" status 2>/dev/null | grep -q "Stale"; then
     log_pass "Status detects partial state"
 else
@@ -149,8 +149,8 @@ cleanup
 for i in 1 2 3; do
     "$BINARY" strict-single curl 100kb 2>/dev/null || true
     sleep 0.5
-    # Simulate crash
-    rm -f "$PIN_DIR/enforce_dl_link" "$PIN_DIR/enforce_ul_link" 2>/dev/null
+    # Simulate crash — remove program pins
+    rm -f "$PIN_DIR/enforce_dl" "$PIN_DIR/enforce_ul" 2>/dev/null
     "$BINARY" recover 2>/dev/null
     if [ -d "$PIN_DIR" ] && [ -n "$(ls -A "$PIN_DIR" 2>/dev/null)" ]; then
         log_fail "Cycle $i: pins remain after recover"

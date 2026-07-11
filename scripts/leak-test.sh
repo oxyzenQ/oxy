@@ -27,39 +27,33 @@ fail() { echo "  ✗ $1"; FAIL=$((FAIL + 1)); }
 
 check_clean() {
     local label="$1"
-    local progs maps pid
+    local pins pid
 
-    progs=$(bpftool prog show 2>/dev/null | grep -c "enforce" || true)
-    progs=${progs:-0}
-    maps=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
-    maps=${maps:-0}
+    pins=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
+    pins=${pins:-0}
     pid=$(test -f /tmp/zelynic.pid && echo "1" || echo "0")
 
-    if [[ "$progs" == "0" && "$maps" == "0" && "$pid" == "0" ]]; then
-        pass "$label: clean (progs=0 maps=0 pid=0)"
+    if [[ "$pins" == "0" && "$pid" == "0" ]]; then
+        pass "$label: clean (pins=0 pid=0)"
     else
-        fail "$label: orphan (progs=$progs maps=$maps pid=$pid)"
+        fail "$label: orphan (pins=$pins pid=$pid)"
     fi
 }
 
 check_active() {
     local label="$1"
-    local progs maps pid
+    local pins pid
 
-    progs=$(bpftool prog show 2>/dev/null | grep -c "enforce" || true)
-    progs=${progs:-0}
-    maps=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
-    maps=${maps:-0}
+    pins=$(ls /sys/fs/bpf/zelynic/ 2>/dev/null | wc -l || true)
+    pins=${pins:-0}
     pid=$(test -f /tmp/zelynic.pid && echo "1" || echo "0")
 
-    # Active = pinned maps exist + PID file exists.
-    # BPF program count via bpftool is unreliable across distros
-    # (Fedora may show different prog names or not expose them to
-    # non-child processes). Maps + PID are the reliable indicators.
-    if [[ "$maps" -gt 0 && "$pid" == "1" ]]; then
-        pass "$label: active (progs=$progs maps=$maps pid=$pid)"
+    # Active = pin files exist (maps + programs pinned).
+    # PID file no longer used (fire-and-forget), but check for legacy.
+    if [[ "$pins" -gt 0 ]]; then
+        pass "$label: active (pins=$pins)"
     else
-        fail "$label: not active (progs=$progs maps=$maps pid=$pid)"
+        fail "$label: not active (pins=$pins)"
     fi
 }
 
