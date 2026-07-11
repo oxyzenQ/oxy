@@ -31,70 +31,11 @@ pub use crate::ebpf::limiter_types::{
     LimiterStatsRaw, PolicyRaw, RateSpec, Target, MAX_RATE, MIN_RATE,
 };
 
-// ━━ Pin paths — single source of truth ━━
-//
-// All BPF pin file paths are defined here. Other modules (commands/mod.rs)
-// import these constants via `pub use` re-exports. This ensures that adding
-// a new map or program only requires updating ONE location.
-
-/// Root pin directory on bpffs.
-pub const PIN_DIR: &str = "/sys/fs/bpf/zelynic";
-
-/// Program pins (BPF programs stay loaded after process exit).
-pub const PIN_PROG_DL: &str = "/sys/fs/bpf/zelynic/enforce_dl";
-pub const PIN_PROG_UL: &str = "/sys/fs/bpf/zelynic/enforce_ul";
-
-/// Link pins (bpf_links stay attached after process exit).
-pub const PIN_LINK_DL: &str = "/sys/fs/bpf/zelynic/enforce_dl_link";
-pub const PIN_LINK_UL: &str = "/sys/fs/bpf/zelynic/enforce_ul_link";
-
-/// Map pins (all 8 maps are pinned via LIBBPF_PIN_BY_NAME).
-pub const PIN_MAP_POLICY_DL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_dl";
-pub const PIN_MAP_POLICY_UL: &str = "/sys/fs/bpf/zelynic/cgroup_policy_ul";
-pub const PIN_MAP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_dl";
-pub const PIN_MAP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/cgroup_bucket_ul";
-pub const PIN_MAP_GROUP_BUCKET_DL: &str = "/sys/fs/bpf/zelynic/group_bucket_dl";
-pub const PIN_MAP_GROUP_BUCKET_UL: &str = "/sys/fs/bpf/zelynic/group_bucket_ul";
-pub const PIN_MAP_WATCHDOG: &str = "/sys/fs/bpf/zelynic/watchdog_deadline";
-pub const PIN_MAP_STATS: &str = "/sys/fs/bpf/zelynic/cgroup_limiter_stats";
-pub const PIN_MAP_SCHEMA_VERSION: &str = "/sys/fs/bpf/zelynic/schema_version";
-
-/// Read the pinned schema version. Returns None if pin doesn't exist or read fails.
-fn read_pinned_schema_version() -> Option<u32> {
-    let map_data = MapData::from_pin(PIN_MAP_SCHEMA_VERSION).ok()?;
-    let map_obj = aya::maps::Map::Array(map_data);
-    let map: BpfArray<_, u32> = BpfArray::try_from(&map_obj).ok()?;
-    let key: u32 = 0;
-    map.get(&key, 0).ok()
-}
-
-/// Check if the pin directory has any files.
-/// Used by status/unstrict-all to detect stale partial state.
-pub fn pin_dir_has_files() -> bool {
-    let pin_dir = PathBuf::from(PIN_DIR);
-    pin_dir.exists()
-        && std::fs::read_dir(&pin_dir)
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false)
-}
-
-/// Remove ALL pin files + directory. Full cleanup.
-/// Iterates the pin directory and removes every file, then removes the
-/// directory itself. Robust against future map/program additions — no
-/// need to update a list when new pins are added.
-pub fn unpin_all() -> Result<()> {
-    let pin_dir = PathBuf::from(PIN_DIR);
-    if pin_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&pin_dir) {
-            for entry in entries.flatten() {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-        let _ = std::fs::remove_dir(&pin_dir);
-    }
-    Ok(())
-}
-
+pub use crate::ebpf::pin::{
+    pin_dir_has_files, read_pinned_schema_version, unpin_all, PIN_DIR, PIN_LINK_DL, PIN_LINK_UL,
+    PIN_MAP_POLICY_DL, PIN_MAP_POLICY_UL, PIN_MAP_SCHEMA_VERSION, PIN_MAP_STATS, PIN_MAP_WATCHDOG,
+    PIN_PROG_DL, PIN_PROG_UL,
+};
 // ━━ Limiter struct ━━
 
 pub struct Limiter {
@@ -642,8 +583,6 @@ impl Limiter {
         println!("{}", serde_json::to_string_pretty(&status)?);
         Ok(())
     }
-
-    // ━━ Internal helpers ━━
 
     /// Resolve a target to cgroup IDs.
     ///

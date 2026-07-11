@@ -21,6 +21,8 @@ pub mod limiter_types;
 pub mod loader;
 #[cfg(feature = "ebpf")]
 pub mod lock;
+#[cfg(feature = "ebpf")]
+pub mod pin;
 
 // Re-export capability detection (always available)
 pub use crate::ebpf_legacy::*;

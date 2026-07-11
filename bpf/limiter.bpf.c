@@ -3,7 +3,7 @@
 //
 // zelynic eBPF limiter — cgroup_skb token-bucket rate enforcer
 //
-// Wolf Architecture Layer 0: Enforcement.
+// Dragon Architecture Layer 0: Enforcement.
 // Pure eBPF. No tc, no nft, no cgroup-wrapper. The kernel enforces.
 //
 // Two programs:
