@@ -198,19 +198,23 @@ pub enum Commands {
         cgroup: Option<u32>,
     },
 
-    /// Find top bandwidth consumers (snapshot)
+    /// Find top bandwidth consumers (snapshot or live)
     ///
-    /// Collects traffic for N seconds, then shows sorted list of
-    /// top talkers. Perfect for finding what's eating your hotspot data.
+    /// Collects traffic, shows sorted list of top talkers.
+    /// Use --live for long-running tracking (catches bursty apps).
     #[command(name = "top")]
     Top {
-        /// Sample duration in seconds
+        /// Sample duration in seconds (ignored with --live)
         #[arg(long, default_value = "10")]
         duration: u64,
 
         /// Number of top talkers to show
         #[arg(long, default_value = "10")]
         limit: usize,
+
+        /// Live mode: run until Ctrl+C, accumulate + refresh every 5s
+        #[arg(long)]
+        live: bool,
     },
 
     /// Check if your machine supports eBPF

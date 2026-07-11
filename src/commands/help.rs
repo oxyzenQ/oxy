@@ -73,11 +73,12 @@ pub(crate) fn print_help_all() {
     println!("    sudo zelynic observe --interval 3              # all traffic");
     println!("    sudo zelynic observe --cgroup 8066 --interval 2 # filter to one cgroup");
     println!(
-        "  {} — Find top bandwidth consumers (snapshot)",
-        "zelynic top [--duration N] [--limit N]".green()
+        "  {} — Find top bandwidth consumers (snapshot or live)",
+        "zelynic top [--duration N] [--limit N] [--live]".green()
     );
-    println!("    sudo zelynic top                              # 10s sample, top 10");
-    println!("    sudo zelynic top --duration 30 --limit 5      # 30s sample, top 5");
+    println!("    sudo zelynic top                              # 10s snapshot, top 10");
+    println!("    sudo zelynic top --duration 30 --limit 5      # 30s snapshot, top 5");
+    println!("    sudo zelynic top --live                       # live until Ctrl+C (catches bursty apps)");
     println!("  {} — Check eBPF support", "zelynic doctor".green());
     println!();
     println!("{}", "Global flags:".cyan().bold());
