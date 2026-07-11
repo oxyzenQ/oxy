@@ -53,12 +53,20 @@ impl Drop for AltScreen {
     }
 }
 
-/// Check if q/ESC/Ctrl+C was pressed (non-blocking).
+/// Check if q or Ctrl+C was pressed (non-blocking).
+/// Does NOT check for ESC — ESC is the start of many escape sequences
+/// (arrow keys, mouse scroll, etc.) and causes false exits.
 pub fn should_quit() -> bool {
-    let mut buf = [0u8; 1];
+    let mut buf = [0u8; 16]; // read up to 16 bytes to drain escape sequences
     if let Ok(n) = io::stdin().read(&mut buf) {
         if n > 0 {
-            return buf[0] == b'q' || buf[0] == 0x1b || buf[0] == 0x03;
+            // Only quit on 'q' or Ctrl+C (0x03)
+            // Drain everything else (escape sequences from scroll, arrows, etc.)
+            for &b in &buf[..n] {
+                if b == b'q' || b == 0x03 {
+                    return true;
+                }
+            }
         }
     }
     false
