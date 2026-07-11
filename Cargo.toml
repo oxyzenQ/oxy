@@ -2,7 +2,7 @@
 name = "zelynic"
 version = "10.0.0"
 edition = "2021"
-description = "Per-app network rate limiter for Linux"
+description = "Per-app network rate limiter for Linux. Pure eBPF. Silent but killer."
 authors = ["rezky_nightky (oxyzenQ) <with dot rezky at gmail dot com>"]
 license = "GPL-3.0-only"
 repository = "https://github.com/oxyzenQ/zelynic"

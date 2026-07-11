@@ -94,7 +94,7 @@ create_archive() {
 
     # Copy test scripts (for VM/hardware testing)
     install -dm755 "$pkg_dir/scripts"
-    for script in distros-depth-test.sh leak-test.sh stress-test.sh benchmark.sh long-endurance-test.sh; do
+    for script in distros-depth-test.sh leak-test.sh stress-test.sh benchmarking.sh long-endurance-test.sh; do
         [[ -f "scripts/$script" ]] && install -m755 "scripts/$script" "$pkg_dir/scripts/"
     done
 

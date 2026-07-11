@@ -86,16 +86,20 @@ sudo zelynic strict-single firefox -d 1mb -u 500kb
 sudo zelynic strict-multi brave:curl:pacman 1mb
 
 # Limit ALL user apps
-sudo zelynic all-limit 500kb
+sudo zelynic limit-all 500kb
 
 # Find what's eating your bandwidth (10s snapshot)
 sudo zelynic top
 
-# Live tracking — catches bursty apps (Ctrl+q/ESC to quit)
+# Live tracking — catches bursty apps (q/ESC/Ctrl+C to quit)
 sudo zelynic top --live 0
 
-# Monitor traffic in box mode (UL + DL, clean terminal)
+# Monitor traffic in alt screen (UL + DL, clean terminal)
 sudo zelynic observe
+
+# Block an app from internet entirely
+sudo zelynic block-single brave
+sudo zelynic unblock brave
 
 # Check active limits
 sudo zelynic status
@@ -121,8 +125,12 @@ sudo zelynic doctor
 ```
 strict-single <target> [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
 strict-multi  <a:b:c>  [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
-all-limit              [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
+limit-all              [rate] [-d <rate>] [-u <rate>] [--allow-dangerous] [--force]
+block-single <target> [--force]
+block-multi  <a:b:c>   [--force]
+block-all              [--force]
 unstrict <target>
+unblock <target>
 unstrict-all
 recover
 status [--print-json]
@@ -247,7 +255,7 @@ Release cadence slows to "when needed".
 
 - [Dragon Architecture](docs/DRAGON_ARCHITECTURE.md) — design + principles
 - [Kernel Compatibility](docs/KERNEL_COMPATIBILITY.md) — requirements + distro matrix
-- [Performance Metrics](docs/PERFORMANCE.md) — benchmark results + targets
+- [Performance Metrics](docs/PERFORMANCE.md) — deep benchmark results + targets
 - [Migration to v4.0](docs/MIGRATION_V4.md) — v3.x → v4.0 guide
 - [Release Verification](docs/VERIFY_RELEASE.md) — checksum verification
 
