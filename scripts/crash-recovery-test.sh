@@ -111,11 +111,11 @@ else
     log_fail "Recover did not clean up pins"
 fi
 
-# Test 5: Apply limit, simulate partial pin state (remove maps only)
-log_test "Apply limit, simulate partial state (remove maps)"
+# Test 5: Apply limit, simulate partial pin state (remove some map pins)
+log_test "Apply limit, simulate partial state (remove schema_version pin)"
 "$BINARY" strict-single curl 100kb 2>/dev/null || true
 sleep 1
-rm -f "$PIN_DIR/cgroup_policy_dl" "$PIN_DIR/cgroup_policy_ul" 2>/dev/null
+rm -f "$PIN_DIR/schema_version" 2>/dev/null
 if "$BINARY" status 2>/dev/null | grep -q "Stale"; then
     log_pass "Status detects partial state"
 else
