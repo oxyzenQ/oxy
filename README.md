@@ -183,22 +183,22 @@ For `--live` and `--duration` flags:
 
 ## Architecture
 
-**Dragon Architecture** — pure eBPF, single hooking layer:
+**Dragon Architecture** — pure eBPF, no intermediaries:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Layer 4 — Presentation (CLI)                           │
-│  strict-single / strict-multi / status / top / observe  │
-├─────────────────────────────────────────────────────────┤
-│  Layer 3 — Aggregation (delta computation, sorting)     │
-├─────────────────────────────────────────────────────────┤
-│  Layer 2 — Identity Resolution (/proc → cgroup ID)      │
-├─────────────────────────────────────────────────────────┤
-│  Layer 1 — Map Interface (aya, pinned maps)             │
-├─────────────────────────────────────────────────────────┤
-│  Layer 0 — BPF Programs (kernel)                        │
-│  cgroup_skb/ingress (download) + cgroup_skb/egress (upload) │
-└─────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│  Layer 4 — CLI                                    │
+│  strict-single / block / top / observe / status   │
+├───────────────────────────────────────────────────┤
+│  Layer 3 — Aggregation (delta, sort, format)      │
+├───────────────────────────────────────────────────┤
+│  Layer 2 — Identity (/proc → cgroup ID)           │
+├───────────────────────────────────────────────────┤
+│  Layer 1 — Map Interface (aya, pinned maps)       │
+├───────────────────────────────────────────────────┤
+│  Layer 0 — BPF (kernel)                           │
+│  cgroup_skb/ingress + cgroup_skb/egress           │
+└───────────────────────────────────────────────────┘
 ```
 
 ## Philosophy
