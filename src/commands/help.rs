@@ -78,8 +78,9 @@ pub(crate) fn print_help_all() {
     println!("  --no-color        Disable colored output");
     println!();
     println!("{}", "Rate formats:".cyan().bold());
-    println!("  500b    1kb    500kb    1mb    1gb    (lowercase only)");
-    println!("  Min: 1kb (1024 b/s)    Max: 1gb (1,000,000,000 b/s)");
+    println!("  500b    1kb    500kb    1mb    1gb    100gb    (lowercase only)");
+    println!("  Min: 1kb (1024 b/s)    Max: 100gb (100,000,000,000 b/s)");
+    println!("  Both bounds overridable with --allow-dangerous");
     println!();
     println!("{}", "Target formats:".cyan().bold());
     println!("  <process_name>  e.g., brave, firefox, curl");

@@ -14,8 +14,10 @@ pub const BPF_OBJECT_PATH: &str = "bpf/limiter.bpf.o";
 /// Minimum allowed rate: 1 KB/s.
 pub const MIN_RATE: u64 = 1024;
 
-/// Maximum allowed rate: 1 GB/s.
-pub const MAX_RATE: u64 = 1_000_000_000;
+/// Maximum allowed rate: 100 GB/s.
+/// zelynic can enforce up to infinity, but 100 GB/s is the practical default.
+/// Use `--allow-dangerous` to override.
+pub const MAX_RATE: u64 = 100_000_000_000;
 
 /// BPF schema version. Must match `SCHEMA_VERSION` in `bpf/limiter.bpf.c`.
 /// Increment both when BPF struct layouts change. Userspace checks the pinned
@@ -176,7 +178,8 @@ pub fn validate_rate(rate_bps: u64) -> Result<()> {
     }
     if rate_bps > MAX_RATE {
         bail!(
-            "Rate {} is above maximum ({} B/s = 1 GB/s).",
+            "Rate {} is above maximum ({} B/s = 100 GB/s).\n\
+             Use --allow-dangerous to override.",
             rate_bps,
             MAX_RATE
         );
@@ -335,8 +338,8 @@ mod tests {
 
     #[test]
     fn test_validate_rate_maximum() {
-        assert!(validate_rate(2_000_000_000).is_err());
-        assert!(validate_rate(1_000_000_000).is_ok());
+        assert!(validate_rate(200_000_000_000).is_err());
+        assert!(validate_rate(100_000_000_000).is_ok());
     }
 
     #[test]

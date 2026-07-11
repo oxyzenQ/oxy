@@ -116,15 +116,18 @@ Lowercase units only:
 | `1gb` | 1 gigabyte/second |
 | `1000000` | Plain number = bytes/second |
 
-**Bounds**: minimum 1 KB/s, maximum 1 GB/s. Below minimum requires `--allow-dangerous`.
+**Bounds**: minimum 1 KB/s, maximum 100 GB/s. Both bounds can be overridden with `--allow-dangerous`.
 
 ## Safety Features
 
-- **Watchdog**: BPF auto-disables if zelynic crashes (default 30s timeout)
 - **Min-rate guard**: rejects rates below 1 KB/s (prevents bricking apps)
+- **Max-rate guard**: rejects rates above 100 GB/s (unreasonable defaults)
 - **Fire-and-forget**: `strict-single` exits 0, limit persists in background
-- **No residue**: `unstrict-all` kills child + removes all pin files
+- **No residue**: `unstrict-all` removes all pin files + directory
 - **Fail-safe BPF**: returns "allow" on any error path (never blocks on failure)
+- **Dangerous target protection**: 53 system processes blocked by default
+- **Overflow detection**: absurd rates show friendly warning, not wrapped values
+- **Crash recovery**: `zelynic recover` detects + cleans orphaned BPF pins
 
 ## Architecture
 
@@ -181,8 +184,8 @@ zelynic stays small on purpose.
 
 | Branch | Purpose | Status |
 |--------|---------|--------|
-| `main` | Legacy v3.x (tc/nft/systemd-wrapper) | Stable, maintained |
-| `dragon-architecture` | Pure eBPF v4.0.0-alpha | Active development |
+| `main` | Pure eBPF v5.x (Dragon Architecture) | Active development |
+| `legacy` | v3.1.1 (tc/nft/systemd-wrapper) | Final legacy release, no new development |
 
 ## Documentation
 

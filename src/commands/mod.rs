@@ -629,12 +629,14 @@ fn print_summary_line(
 /// Parse a rate string with validation.
 #[cfg(feature = "ebpf")]
 fn parse_rate_checked(s: &str, allow_dangerous: bool) -> Result<u64> {
-    use crate::ebpf::limiter::{parse_rate, validate_rate, MIN_RATE};
+    use crate::ebpf::limiter::{parse_rate, validate_rate, MAX_RATE, MIN_RATE};
     let rate = parse_rate(s)?;
     if !allow_dangerous {
         validate_rate(rate)?;
     } else if rate < MIN_RATE {
         eprintln!("[limiter] WARNING: rate below minimum — overriding with --allow-dangerous");
+    } else if rate > MAX_RATE {
+        eprintln!("[limiter] WARNING: rate above maximum — overriding with --allow-dangerous");
     }
     Ok(rate)
 }
