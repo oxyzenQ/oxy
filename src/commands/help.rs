@@ -37,11 +37,10 @@ pub(crate) fn print_help_all() {
     println!();
     println!(
         "  {} — Limit ALL user apps from list-apps",
-        "zelynic all-limit [rate] [-d <rate>] [-u <rate>]".green()
+        "zelynic limit-all [rate] [-d <rate>] [-u <rate>]".green()
     );
-    println!("    sudo zelynic all-limit 500kb              # limit all user apps");
-    println!("    sudo zelynic all-limit -d 1mb -u 500kb    # per-direction");
-    println!();
+    println!("    sudo zelynic limit-all 500kb              # limit all user apps");
+    println!("    sudo zelynic limit-all -d 1mb -u 500kb    # per-direction");
     println!(
         "  {} — Remove limit from one app",
         "zelynic unstrict <target>".green()
@@ -58,6 +57,17 @@ pub(crate) fn print_help_all() {
         "zelynic block-single <target>".green()
     );
     println!("    sudo zelynic block-single brave");
+    println!(
+        "  {} — Block multiple apps from internet",
+        "zelynic block-multi <a:b:c>".green()
+    );
+    println!("    sudo zelynic block-multi brave:curl:pacman");
+    println!(
+        "  {} — Block ALL user apps from internet",
+        "zelynic block-all".green()
+    );
+    println!("    sudo zelynic block-all                   # all user apps");
+    println!("    sudo zelynic block-all --force            # include system apps");
     println!(
         "  {} — Unblock an app (restore internet access)",
         "zelynic unblock <target>".green()

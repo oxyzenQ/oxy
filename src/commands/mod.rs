@@ -96,7 +96,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             }
         }
 
-        Some(Commands::AllLimit {
+        Some(Commands::LimitAll {
             rate,
             download,
             upload,
@@ -105,7 +105,7 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
         }) => {
             #[cfg(feature = "ebpf")]
             {
-                handle_all_limit(
+                handle_limit_all(
                     rate.as_deref(),
                     download.as_deref(),
                     upload.as_deref(),
@@ -130,6 +130,32 @@ pub(crate) fn dispatch(cli: Cli) -> Result<()> {
             #[cfg(not(feature = "ebpf"))]
             {
                 let _ = (target, force, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::BlockMulti { targets, force }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_block_multi(&targets, force, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (targets, force, cli.verbose);
+                eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
+                Err(anyhow::anyhow!("eBPF feature not enabled"))
+            }
+        }
+
+        Some(Commands::BlockAll { force }) => {
+            #[cfg(feature = "ebpf")]
+            {
+                handle_block_all(force, cli.verbose)
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (force, cli.verbose);
                 eprintln!("eBPF not compiled. Rebuild with: cargo build --features ebpf");
                 Err(anyhow::anyhow!("eBPF feature not enabled"))
             }
@@ -489,11 +515,11 @@ fn handle_strict_multi(
     Ok(())
 }
 
-/// Handle `zelynic all-limit` — limit ALL user apps.
+/// Handle `zelynic limit-all` — limit ALL user apps.
 /// System/dangerous apps are excluded unless --force.
 #[cfg(feature = "ebpf")]
 #[allow(clippy::too_many_arguments)]
-fn handle_all_limit(
+fn handle_limit_all(
     rate: Option<&str>,
     download: Option<&str>,
     upload: Option<&str>,
@@ -516,7 +542,7 @@ fn handle_all_limit(
     if rates.download.is_none() && rates.upload.is_none() {
         return Err(anyhow::anyhow!(
             "No rate specified. Use positional rate or -d/-u flags.\n\
-             Example: zelynic all-limit 500kb"
+             Example: zelynic limit-all 500kb"
         ));
     }
 
@@ -756,6 +782,117 @@ fn handle_block_single(target_str: &str, force: bool, verbose: bool) -> Result<(
 
     eprintln!("Blocked '{target_str}' from internet ({applied} policies, active in background)");
     eprintln!("Run 'zelynic unblock {target_str}' to restore access, 'zelynic status' to check.");
+    Ok(())
+}
+
+/// Handle `zelynic block-multi` — block multiple apps from internet.
+#[cfg(feature = "ebpf")]
+fn handle_block_multi(targets_str: &str, force: bool, verbose: bool) -> Result<()> {
+    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let _lock = crate::ebpf::lock::acquire()?;
+
+    let targets: Vec<Target> = targets_str.split(':').map(Target::parse).collect();
+    for t in &targets {
+        if let Target::ProcessName(name) = t {
+            check_dangerous_target(name, force)?;
+        }
+    }
+
+    Limiter::attach(verbose)?;
+    let mut limiter = Limiter::open_pinned(verbose)?;
+
+    let rates = RateSpec {
+        download: Some(0),
+        upload: Some(0),
+    };
+    let applied = limiter.apply_group(&targets, &rates)?;
+    if applied == 0 {
+        eprintln!("No cgroups found for '{targets_str}'. Nothing to block.");
+        return Ok(());
+    }
+
+    eprintln!("Blocked '{targets_str}' from internet ({applied} policies, active in background)");
+    eprintln!("Run 'zelynic unblock <target>' to restore access.");
+    Ok(())
+}
+
+/// Handle `zelynic block-all` — block ALL user apps from internet.
+#[cfg(feature = "ebpf")]
+fn handle_block_all(force: bool, verbose: bool) -> Result<()> {
+    use crate::ebpf::identity::IdentityMap;
+    use crate::ebpf::limiter::{Limiter, RateSpec, Target};
+
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("zelynic requires root. Run with sudo.");
+        return Err(anyhow::anyhow!("root required"));
+    }
+
+    let _lock = crate::ebpf::lock::acquire()?;
+
+    let mut identity = IdentityMap::new();
+    identity.refresh();
+
+    let user_apps: Vec<_> = identity
+        .all()
+        .into_iter()
+        .filter(|e| !e.comm.is_empty() && e.uid > 0)
+        .collect();
+
+    let system_apps: Vec<_> = identity
+        .all()
+        .into_iter()
+        .filter(|e| !e.comm.is_empty() && e.uid == 0)
+        .collect();
+
+    if !force && !system_apps.is_empty() {
+        eprintln!("Blocking {} user app(s)", user_apps.len());
+        eprintln!(
+            "Skipped {} system app(s) (use --force to include):",
+            system_apps.len()
+        );
+        for app in system_apps.iter().take(20) {
+            eprintln!("  - {}", app.comm);
+        }
+    }
+
+    let targets: Vec<Target> = if force {
+        identity
+            .all()
+            .into_iter()
+            .filter(|e| !e.comm.is_empty())
+            .map(|e| Target::CgroupId(e.cgroup_id))
+            .collect()
+    } else {
+        user_apps
+            .iter()
+            .map(|e| Target::CgroupId(e.cgroup_id))
+            .collect()
+    };
+
+    if targets.is_empty() {
+        eprintln!("No apps to block.");
+        return Ok(());
+    }
+
+    Limiter::attach(verbose)?;
+    let mut limiter = Limiter::open_pinned(verbose)?;
+
+    let rates = RateSpec {
+        download: Some(0),
+        upload: Some(0),
+    };
+    let applied = limiter.apply_group(&targets, &rates)?;
+    eprintln!(
+        "Blocked {} app(s) from internet ({applied} policies, active in background)",
+        targets.len()
+    );
+    eprintln!("Run 'zelynic unstrict-all' to restore all access.");
     Ok(())
 }
 

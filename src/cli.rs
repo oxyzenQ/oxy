@@ -126,10 +126,10 @@ pub enum Commands {
     /// Use --force to include system apps.
     ///
     /// Examples:
-    ///   zelynic all-limit 500kb              # limit all user apps
-    ///   zelynic all-limit -d 1mb -u 500kb    # per-direction
-    #[command(name = "all-limit")]
-    AllLimit {
+    ///   zelynic limit-all 500kb              # limit all user apps
+    ///   zelynic limit-all -d 1mb -u 500kb    # per-direction
+    #[command(name = "limit-all")]
+    LimitAll {
         /// Rate for both download+upload (e.g., 500kb, 1mb)
         #[arg(value_name = "RATE")]
         rate: Option<String>,
@@ -147,6 +147,29 @@ pub enum Commands {
         allow_dangerous: bool,
 
         /// Include system/dangerous targets (root, systemd, kthreadd, etc.)
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Block multiple apps from the internet entirely
+    ///
+    /// Example: zelynic block-multi brave:curl:pacman
+    #[command(name = "block-multi")]
+    BlockMulti {
+        /// Targets separated by colons (e.g., brave:curl:pacman)
+        targets: String,
+
+        /// Force block on dangerous/system targets
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Block ALL user apps from the internet
+    ///
+    /// System apps excluded by default. Use --force to include.
+    #[command(name = "block-all")]
+    BlockAll {
+        /// Include system/dangerous targets
         #[arg(long)]
         force: bool,
     },

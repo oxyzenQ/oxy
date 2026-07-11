@@ -198,11 +198,13 @@ pub fn parse_rate(s: &str) -> Result<u64> {
 }
 
 /// Validate rate is within bounds.
+/// rate = 0 is allowed (means BLOCK in BPF schema v3+).
+/// rate 1-1023 is rejected (below minimum, would brick apps).
 pub fn validate_rate(rate_bps: u64) -> Result<()> {
-    if rate_bps < MIN_RATE {
+    if rate_bps > 0 && rate_bps < MIN_RATE {
         bail!(
             "Rate {} is below minimum ({} B/s = 1 KB/s).\n\
-             Use --allow-dangerous to override.",
+             Use --allow-dangerous to override. Use 0 for block.",
             rate_bps,
             MIN_RATE
         );
@@ -261,7 +263,11 @@ pub fn format_bytes(bytes: u64) -> String {
 ///
 /// Examples: 100_000 → "100.0 KB/s", 1_000_000 → "1.0 MB/s"
 pub fn format_rate(bps: u64) -> String {
-    format!("{}/s", format_bytes(bps))
+    if bps == 0 {
+        "BLOCKED".to_string()
+    } else {
+        format!("{}/s", format_bytes(bps))
+    }
 }
 
 /// Get terminal width in columns. Uses ioctl TIOCGWINSZ.
@@ -427,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_format_rate_with_suffix() {
-        assert_eq!(format_rate(0), "0 B/s");
+        assert_eq!(format_rate(0), "BLOCKED");
         assert_eq!(format_rate(100_000), "100.0 KB/s");
         assert_eq!(format_rate(1_000_000), "1.0 MB/s");
         assert_eq!(format_rate(1_000_000_000), "1.00 GB/s");
