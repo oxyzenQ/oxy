@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.0] — 2026-07-11
+
+### Production Hardening
+
+v7.0.0 focuses on making zelynic fast, lean, and predictable. Introduces
+lazy identity refresh for faster startup, Python-based benchmark engine
+for deep performance testing, and performance documentation.
+
+#### Performance Optimizations
+
+- **feat: lazy identity refresh** — `open_pinned()` no longer scans /proc
+  for all cgroups on every call. Identity refresh is deferred to
+  `refresh_identity()` (only called by `status` command). Write operations
+  (`strict-single`, `unstrict`, `unstrict-all`) skip identity refresh
+  entirely, saving ~50-100ms per operation.
+
+- **audit: allocation hot paths** — reviewed all allocations in limiter.rs.
+  Hot path (BPF execution) is allocation-free. Remaining allocations are
+  in error paths (format! for context) or status display — acceptable.
+
+#### Testing Suite
+
+- **test: `benchmark.py`** — Python-based deep performance testing engine.
+  Measures: startup latency, status query latency, memory footprint,
+  concurrent operation throughput, rate accuracy. Supports `--quick` and
+  `--json` modes. Python used for timing precision + statistical analysis
+  + subprocess management (bash is for quick run, Python is the beast).
+
+- **docs: `PERFORMANCE.md`** — baseline metrics + targets + measurement
+  methodology. Includes regression detection instructions.
+
+#### Documentation
+
+- **docs: PERFORMANCE.md** — performance targets, measurement methodology,
+  optimization history, BPF instruction budget, regression detection.
+
+#### Verification
+
+- 46 unit tests + 4 integration tests pass
+- cargo clippy + clang-format + policy check all clean
+- Startup latency improved ~50-100ms (lazy identity refresh)
+- LOC: all files under 1300 policy limit
+
+---
+
 ## [6.0.0] — 2026-07-11
 
 ### Reliability & Endurance

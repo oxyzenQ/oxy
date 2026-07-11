@@ -1,6 +1,6 @@
 [package]
 name = "zelynic"
-version = "6.0.0"
+version = "7.0.0"
 edition = "2021"
 description = "Per-app network rate limiter for Linux"
 authors = ["rezky_nightky (oxyzenQ) <with dot rezky at gmail dot com>"]

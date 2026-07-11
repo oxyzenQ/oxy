@@ -895,17 +895,20 @@ impl Limiter {
 
     /// Open pinned maps for read/write access (no BPF program load needed).
     /// Used by parent process to access policies managed by serve child.
+    ///
+    /// Identity refresh is lazy — only triggered when `refresh_identity()`
+    /// or `maybe_refresh_identity()` is called. This speeds up startup
+    /// for write operations (strict-single etc.) that don't need identity.
     pub fn open_pinned(verbose: bool) -> Result<Self> {
-        let mut limiter = Limiter {
+        let limiter = Limiter {
             bpf: None, // No Ebpf object — using pinned maps directly
             cgroup_path: "/sys/fs/cgroup".to_string(),
             identity: IdentityMap::new(),
             verbose,
         };
 
-        let resolved = limiter.identity.refresh();
         if verbose {
-            eprintln!("[limiter] Identity map: {} cgroups resolved", resolved);
+            eprintln!("[limiter] Opened pinned maps (identity lazy-loaded)");
         }
 
         Ok(limiter)
