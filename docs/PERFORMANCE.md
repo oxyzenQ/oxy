@@ -20,11 +20,13 @@ sudo python3 scripts/benchmark.py --json    # machine-readable output
 
 ## Baseline Targets
 
+> Measured on: Arch Linux (CachyOS), kernel 6.18.38, AMD Ryzen 7 5800HS, 3 iterations (--quick mode)
+
 ### Startup Latency
 
 | Operation | Target | Measured |
 |-----------|--------|----------|
-| `strict-single` (spawn → exit) | < 50ms | TBD |
+| `strict-single` (spawn → exit) | < 50ms | **32.3ms** ✅ |
 | `unstrict-all` | < 30ms | TBD |
 | `recover` (stale state) | < 50ms | TBD |
 
@@ -32,7 +34,7 @@ sudo python3 scripts/benchmark.py --json    # machine-readable output
 
 | Operation | Target | Measured |
 |-----------|--------|----------|
-| `status` (1 limit) | < 20ms | TBD |
+| `status` (1 limit) | < 20ms | **10.7ms** ✅ |
 | `status` (50 limits) | < 100ms | TBD |
 | `list-apps` | < 100ms | TBD |
 
@@ -40,17 +42,18 @@ sudo python3 scripts/benchmark.py --json    # machine-readable output
 
 | Component | Target | Measured |
 |-----------|--------|----------|
-| Pin files (13 files) | < 10KB | TBD |
-| BPF programs (2) | kernel-managed | TBD |
-| BPF maps (8) | < 100KB total | TBD |
-| Userspace RSS (during op) | < 5MB | TBD |
+| Pin files (13 files) | < 10KB | **0 bytes** ✅ |
+| BPF programs (2) | kernel-managed | **2 programs** ✅ |
+| BPF maps (8) | < 100KB total | 8 pinned (bpftool counts differ) |
+| Userspace RSS (during op) | < 5MB | process exits after apply |
 
 ### Throughput
 
 | Operation | Target | Measured |
 |-----------|--------|----------|
-| Concurrent strict-single (5 parallel) | < 200ms total | TBD |
+| Concurrent strict-single (5 parallel) | < 200ms total | **31.3ms** ✅ |
 | Rate change during traffic | < 50ms | TBD |
+| Throughput (ops/sec) | > 50 | **159.6 ops/sec** ✅ |
 
 ### Rate Accuracy
 
