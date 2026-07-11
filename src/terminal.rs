@@ -23,7 +23,7 @@ impl AltScreen {
         let original = tcgetattr(&stdin)?;
 
         let mut raw = original.clone();
-        raw.local_flags &= !(LocalFlags::ICANON | LocalFlags::ECHO);
+        raw.local_flags &= !(LocalFlags::ICANON | LocalFlags::ECHO | LocalFlags::ISIG);
         raw.control_chars[SpecialCharacterIndices::VMIN as usize] = 0;
         raw.control_chars[SpecialCharacterIndices::VTIME as usize] = 0;
 
@@ -53,20 +53,33 @@ impl Drop for AltScreen {
     }
 }
 
-/// Check if q or Ctrl+C was pressed (non-blocking).
-/// Does NOT check for ESC — ESC is the start of many escape sequences
-/// (arrow keys, mouse scroll, etc.) and causes false exits.
+/// Check if q, ESC, or Ctrl+C was pressed (non-blocking).
+///
+/// ESC handling: a standalone ESC key sends exactly 1 byte (0x1b).
+/// Escape sequences (scroll, arrows, mouse) send 0x1b followed by more
+/// bytes (e.g., 0x5b for '['). We distinguish:
+///   - 1 byte, 0x1b → ESC key → quit
+///   - 0x1b + more bytes → escape sequence → drain, don't quit
 pub fn should_quit() -> bool {
-    let mut buf = [0u8; 16]; // read up to 16 bytes to drain escape sequences
+    let mut buf = [0u8; 16];
     if let Ok(n) = io::stdin().read(&mut buf) {
         if n > 0 {
-            // Only quit on 'q' or Ctrl+C (0x03)
-            // Drain everything else (escape sequences from scroll, arrows, etc.)
-            for &b in &buf[..n] {
-                if b == b'q' || b == 0x03 {
-                    return true;
-                }
+            // Check first byte
+            let first = buf[0];
+
+            // Ctrl+C (0x03) or 'q'
+            if first == 0x03 || first == b'q' {
+                return true;
             }
+
+            // ESC key: standalone ESC is exactly 1 byte (0x1b).
+            // If 0x1b is followed by more bytes, it's an escape sequence
+            // (scroll, arrow, mouse) — drain it, don't quit.
+            if first == 0x1b && n == 1 {
+                return true;
+            }
+
+            // Everything else: drain (multi-byte escape sequences, etc.)
         }
     }
     false
