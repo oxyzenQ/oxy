@@ -216,7 +216,7 @@ slightly easier to maintain.
 - ✅ **Pure eBPF** — no tc, no nft, no wrappers
 - ✅ **Small codebase** — minimal dependencies, easy to audit
 - ✅ **Predictable behavior** — same input → same output, every time
-- ✅ **Linux-first** — BSD/macOS source support OK, Windows never
+- ✅ **Linux-first** — BSD/macOS source support OK, never anything else
 
 ### What zelynic will NEVER be
 
@@ -225,7 +225,7 @@ slightly easier to maintain.
 - ❌ No `config.toml` (CLI flags only)
 - ❌ No daemon mode
 - ❌ No REST API
-- ❌ No Windows support
+- ❌ No non-Linux support
 
 ### Stable API (from v10.0.0)
 
